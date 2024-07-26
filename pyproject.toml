@@ -1,0 +1,48 @@
+[project]
+name = "gated-tree-clip"
+version = "0.1.0"
+description = "Gated Tree Clip (仮)"
+authors = [
+    { name = "n4okins", email = "63445867+n4okins@users.noreply.github.com" }
+]
+dependencies = [
+    "torch==2.4.0+cu121",
+    "torchaudio==2.4.0+cu121",
+    "torchvision==0.19.0+cu121",
+    "jax[cuda12]>=0.4.30",
+    "flax>=0.8.5",
+]
+readme = "README.md"
+requires-python = ">= 3.10"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pytest>=8.3.2",
+    "ruff>=0.5.5",
+    "mypy>=1.11.0",
+    "jupyterlab>=4",
+]
+
+[[tool.rye.sources]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu121"
+type = "index"
+
+[[tool.rye.sources]]
+name = "google-jax"
+url = "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+type = "find-links"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gated_tree_clip"]
