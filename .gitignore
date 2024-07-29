@@ -11,3 +11,10 @@ wheels/
 
 # venv
 .venv
+
+# pytest
+.pytest_cache/
+.vscode/
+ignores/
+models/
+src/gated_tree_clip/ext/
