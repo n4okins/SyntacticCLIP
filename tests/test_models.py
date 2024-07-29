@@ -1,15 +1,13 @@
 import torch
 import pytest
 
-from gated_tree_clip.models import CLIP, StructFormer
+import gated_tree_clip.nn as gtnn
+
 
 class TestModels:
-    def test_clip_model(self):
-        model = CLIP(512, 256)
-        x = torch.randn(1, 512)
-        assert model(x).shape == (1, 256)
-    
-    def test_structformer_model(self):
-        model = StructFormer(512, 256)
-        x = torch.randn(1, 512)
-        assert model(x).shape == (1, 256)
+    @pytest.mark.parametrize("model", [gtnn.CLIP, gtnn.StructFormer])
+    def test_model(self, model):
+        model = model(10, 5)
+        x = torch.randn(10)
+        out = model(x)
+        assert out.shape == (5,)
