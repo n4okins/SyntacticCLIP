@@ -1,19 +1,29 @@
 import torch
 import torch.nn as nn
 
+from ..utils.clogging import getColoredLogger
+
+logger = getColoredLogger(__name__)
+
+__all__ = ["PatchDropout"]
+
 
 class PatchDropout(nn.Module):
-    """
+    """Patch Dropout
     https://arxiv.org/abs/2212.00794
+    https://github.com/mlfoundations/open_clip/blob/fc5a37b72d705f760ebbc7915b84729816ed471f/src/open_clip/transformer.py#L49
+    Args:
+        p (float): Probability of an element to be zeroed
+        exclude_first_token (bool): Exclude first token
     """
 
-    def __init__(self, prob, exclude_first_token=True):
+    def __init__(self, p: float = 0.0, exclude_first_token=True):
         super().__init__()
-        assert 0 <= prob < 1.0
-        self.prob = prob
+        assert 0 <= p < 1.0
+        self.prob = p
         self.exclude_first_token = exclude_first_token  # exclude CLS token
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.training or self.prob == 0.0:
             return x
 
