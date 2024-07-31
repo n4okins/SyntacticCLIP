@@ -13,7 +13,7 @@ dependencies = [
     "matplotlib>=3.9.1",
 ]
 readme = "README.md"
-requires-python = ">= 3.10"
+requires-python = ">= 3.12"
 
 [build-system]
 requires = ["hatchling"]
@@ -56,6 +56,14 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 pythonpath = "src"
+
+[tool.mypy]
+exclude = [
+    ".venv/",
+    "ignores/",
+    "src/gated_tree_clip/utils/colors.py",
+    "src/gated_tree_clip/utils/clogging.py",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gated_tree_clip"]

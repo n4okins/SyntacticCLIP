@@ -17,4 +17,3 @@ wheels/
 .vscode/
 ignores/
 models/
-src/gated_tree_clip/ext/

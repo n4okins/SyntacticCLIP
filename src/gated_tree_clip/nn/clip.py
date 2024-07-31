@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 
 from ..utils.clogging import getColoredLogger
-from .gated_tree_transformer import GatedTreeTextTransformer, GatedTreeVisionTransformer
 from .transformer import TextTransformer, VisionTransformer
 
 logger = getColoredLogger(__name__)
@@ -13,12 +12,13 @@ __all__ = ["CLIPBase", "CLIPEncoder", "GatedTreeCLIP"]
 
 
 class CLIPEncoder(nn.Module):
-    def __init__(self, embed_dim: int = 512, backbone: nn.Module = None) -> None:
-        """CLIP encoder wrapper
-        Args:
-            embed_dim (int): Embedding dimension (output dim of the backbone)
-            backbone (nn.Module): Backbone
-        """
+    """CLIP encoder wrapper
+    Args:
+        embed_dim (int): Embedding dimension (output dim of the backbone)
+        backbone (nn.Module): Backbone
+    """
+
+    def __init__(self, embed_dim: int = 512, backbone: Optional[nn.Module] = None) -> None:
         super().__init__()
         self.embed_dim = embed_dim
         self.backbone = backbone or nn.Identity()
@@ -28,18 +28,22 @@ class CLIPEncoder(nn.Module):
 
 
 class CLIPBase(nn.Module):
+    """CLIP base model
+    Args:
+        embed_dim (int): Embedding dimension
+        init_logit_scale (float | torch.Tensor): Initial logit scale
+        init_logit_bias (Optional[float]): Initial logit bias
+    """
+
     def __init__(
         self,
         embed_dim: int = 512,
+        *,
+        visual_backbone: Optional[nn.Module] = None,
+        textual_backbone: Optional[nn.Module] = None,
         init_logit_scale: float | torch.Tensor = torch.log(torch.tensor(1.0 / 0.07)),
         init_logit_bias: Optional[float] = None,
     ) -> None:
-        """CLIP base model
-        Args:
-            embed_dim (int): Embedding dimension
-            init_logit_scale (float | torch.Tensor): Initial logit scale
-            init_logit_bias (Optional[float]): Initial logit bias
-        """
         super().__init__()
         self.embed_dim = embed_dim
 
@@ -50,8 +54,8 @@ class CLIPBase(nn.Module):
         else:
             self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
 
-        self.visual = CLIPEncoder(embed_dim, VisionTransformer(embed_dim))
-        self.textual = CLIPEncoder(embed_dim, TextTransformer(embed_dim))
+        self.visual = CLIPEncoder(embed_dim, visual_backbone or VisionTransformer(embed_dim))
+        self.textual = CLIPEncoder(embed_dim, textual_backbone or TextTransformer(embed_dim))
 
     def get_logits(
         self,
@@ -71,6 +75,7 @@ class CLIPBase(nn.Module):
         """
         image_features = self.encode_image(image, normalize=normalize)
         text_features = self.encode_text(tokens, normalize=normalize)
+
         logits = self.logit_scale.exp() * (image_features @ text_features.T) + self.logit_bias
         if softmax:
             logits = logits.softmax(dim=-1)
@@ -112,11 +117,4 @@ class CLIPBase(nn.Module):
         )
 
 
-class GatedTreeCLIP(CLIPBase):
-    def __init__(
-        self,
-        embed_dim: int = 512,
-        init_logit_scale: float | torch.Tensor = torch.log(torch.tensor(1.0 / 0.07)),
-        init_logit_bias: Optional[float] = None,
-    ):
-        super().__init__(embed_dim, init_logit_scale, init_logit_bias)
+class GatedTreeCLIP(CLIPBase): ...
