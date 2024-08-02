@@ -36,6 +36,7 @@ dev-dependencies = [
     "widgetsnbextension>=4.0.11",
     "jax[cuda12]>=0.4.30",
     "flax>=0.8.5",
+    "utils @ git+https://github.com/n4okins/utils.git",
 ]
 
 [[tool.rye.sources]]
@@ -61,8 +62,6 @@ pythonpath = "src"
 exclude = [
     ".venv/",
     "ignores/",
-    "src/gated_tree_clip/utils/colors.py",
-    "src/gated_tree_clip/utils/clogging.py",
 ]
 
 [tool.hatch.build.targets.wheel]

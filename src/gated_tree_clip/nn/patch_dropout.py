@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-
-from ..utils.clogging import getColoredLogger
+from utils.clogging import getColoredLogger
 
 logger = getColoredLogger(__name__)
 

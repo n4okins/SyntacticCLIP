@@ -4,9 +4,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils.clogging import getColoredLogger
 
-from ..utils.clogging import getColoredLogger
-from .fairseq import FairseqDropout
+from .from_fairseq import FairseqDropout
 from .layernorm import CastLayerNorm
 from .layerscale import LayerScale
 
@@ -24,12 +24,12 @@ class GatedMultiheadAttention(nn.Module):
         self,
         embed_dim,
         num_heads,
-        kdim=None,
-        vdim=None,
         dropout=0.0,
         bias=True,
         add_bias_kv=False,
         add_zero_attn=False,
+        kdim=None,
+        vdim=None,
         self_attention=False,
         encoder_decoder_attention=False,
         use_sigmoid=False,
@@ -464,7 +464,6 @@ class GatedMultiheadAttention(nn.Module):
             state_dict[key] = value
 
 
-# TODO: Implement GatedResidualAttentionBlock
 class GatedResidualAttentionBlock(nn.Module):
     """GatedResidual Attention Block
     Args:
@@ -480,16 +479,17 @@ class GatedResidualAttentionBlock(nn.Module):
     def __init__(
         self,
         embed_dim: int = 512,
-        *,
-        res_mlp_dim: Optional[int] = None,
-        res_mlp: Optional[nn.Module] = None,
         num_heads: int = 8,
         batch_first: bool = True,
+        *,
+        res_mlp: Optional[nn.Module] = None,
+        res_mlp_dim: Optional[int] = None,
         is_cross_attention: bool = False,
         init_layer_scale_ratio: Optional[float] = None,
     ) -> None:
         super().__init__()
         res_mlp_dim = res_mlp_dim or embed_dim * 4
+
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.batch_first = batch_first
@@ -508,12 +508,15 @@ class GatedResidualAttentionBlock(nn.Module):
         )
         self.layer_norm_2 = CastLayerNorm(normalized_shape=embed_dim)
 
-        self.res_mlp = res_mlp or nn.Sequential(
-            nn.Linear(in_features=embed_dim, out_features=res_mlp_dim),
-            nn.GELU(),
-            nn.Linear(in_features=res_mlp_dim, out_features=embed_dim),
+        self.res_mlp = (
+            res_mlp
+            if res_mlp
+            else nn.Sequential(
+                nn.Linear(in_features=embed_dim, out_features=res_mlp_dim),
+                nn.GELU(),
+                nn.Linear(in_features=res_mlp_dim, out_features=embed_dim),
+            )
         )
-
         self.layer_scale_2 = (
             LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
             if init_layer_scale_ratio

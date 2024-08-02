@@ -8,8 +8,7 @@ from typing import Optional
 
 import torch.nn as nn
 import torch.nn.functional as F
-
-from ..utils.clogging import getColoredLogger
+from utils.clogging import getColoredLogger
 
 logger = getColoredLogger(__name__)
 

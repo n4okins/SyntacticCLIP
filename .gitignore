@@ -17,3 +17,5 @@ wheels/
 .vscode/
 ignores/
 models/
+
+main.py

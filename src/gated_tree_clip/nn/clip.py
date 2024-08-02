@@ -2,8 +2,8 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
+from utils.clogging import getColoredLogger
 
-from ..utils.clogging import getColoredLogger
 from .transformer import TextTransformer, VisionTransformer
 
 logger = getColoredLogger(__name__)
@@ -89,7 +89,7 @@ class CLIPBase(nn.Module):
         Returns:
             torch.Tensor: [B, D], D=visual.embed_dim
         """
-        feats = self.visual(images)
+        feats, _ = self.visual(images)
         if normalize:
             feats /= feats.norm(dim=-1, keepdim=True)
         return feats
@@ -102,7 +102,7 @@ class CLIPBase(nn.Module):
         Returns:
             torch.Tensor: [B, D], D=textual.embed_dim
         """
-        feats = self.textual(tokens)
+        feats, _ = self.textual(tokens)
         if normalize:
             feats /= feats.norm(dim=-1, keepdim=True)
         return feats

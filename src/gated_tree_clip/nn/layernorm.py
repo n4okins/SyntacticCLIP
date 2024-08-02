@@ -1,8 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-from ..utils.clogging import getColoredLogger
+from utils.clogging import getColoredLogger
 
 logger = getColoredLogger(__name__)
 

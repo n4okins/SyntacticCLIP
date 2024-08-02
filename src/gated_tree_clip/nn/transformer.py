@@ -2,8 +2,8 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from utils.clogging import getColoredLogger
 
-from ..utils.clogging import getColoredLogger
 from .attention import ResidualAttentionBlock
 from .layernorm import CastLayerNorm
 from .patch_dropout import PatchDropout
@@ -59,7 +59,7 @@ class Transformer(nn.Module):
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
 
-        for i, res_attn_block in enumerate(self.res_attn_blocks):
+        for res_attn_block in self.res_attn_blocks:
             if is_checkpoint and not torch.jit.is_scripting():
                 x = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
             else:
@@ -88,6 +88,7 @@ class VisionTransformer(Transformer):
         embed_dim: int = 512,
         num_heads: int = 12,
         num_layers: int = 12,
+        batch_first: bool = True,
         *,
         input_image_size: int | tuple[int, int] | tuple[int, int, int] = 224,
         patch_embed_dim: int = 768,
@@ -95,7 +96,7 @@ class VisionTransformer(Transformer):
         patch_stride: Optional[tuple[int, int]] = None,
         patch_dropout_prob: float = 0.0,
     ) -> None:
-        super().__init__(patch_embed_dim, num_heads, num_layers, batch_first=True)
+        super().__init__(patch_embed_dim, num_heads, num_layers, batch_first)
         self.embed_dim = embed_dim
         self.patch_embed_dim = patch_embed_dim
 
@@ -111,7 +112,7 @@ class VisionTransformer(Transformer):
         self.patch_size = patch_size
         self.patch_stride = patch_stride or patch_size
 
-        self.scale = patch_embed_dim**-0.5
+        self.scale = patch_embed_dim ** (-0.5)
         self.input_image_size = input_image_size
 
         # check if the input image size is divisible by the patch size
@@ -145,7 +146,7 @@ class VisionTransformer(Transformer):
 
         self.head_weight = nn.Parameter(self.scale * torch.randn(patch_embed_dim, embed_dim))
 
-    def forward(self, x: torch.Tensor, return_tokens: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, channels, height, width]
@@ -177,10 +178,7 @@ class VisionTransformer(Transformer):
         # [batch, self.patch_embed_dim] -> [batch, self.embed_dim]
         pooled = pooled @ self.head_weight
 
-        if return_tokens:
-            return pooled, tokens
-        else:
-            return pooled
+        return pooled, tokens
 
 
 class TextTransformer(Transformer):
@@ -200,13 +198,14 @@ class TextTransformer(Transformer):
         embed_dim: int = 512,
         num_heads: int = 8,
         num_layers: int = 12,
+        batch_first: bool = True,
         *,
         vocab_size: int = 49408,
         vocab_embed_dim: int = 512,
         max_context_length: int = 77,
         pad_token_id: int = 0,
     ):
-        super().__init__(vocab_embed_dim, num_heads, num_layers, batch_first=True)
+        super().__init__(vocab_embed_dim, num_heads, num_layers, batch_first)
         self.embed_dim = embed_dim
 
         self.vocab_size = vocab_size
@@ -228,7 +227,7 @@ class TextTransformer(Transformer):
 
         self.head_weight = nn.Parameter(torch.randn(vocab_embed_dim, embed_dim))
 
-    def forward(self, x: torch.Tensor, return_tokens: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, sequence_length]
@@ -244,7 +243,4 @@ class TextTransformer(Transformer):
         pooled, tokens = x[torch.arange(batch_size), x_in.argmax(dim=-1)], x
         pooled = pooled @ self.head_weight
 
-        if return_tokens:
-            return pooled, tokens
-        else:
-            return pooled
+        return pooled, tokens

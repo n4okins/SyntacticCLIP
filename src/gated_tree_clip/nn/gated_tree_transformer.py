@@ -2,8 +2,8 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from utils.clogging import getColoredLogger
 
-from ..utils.clogging import getColoredLogger
 from .gated_attention import GatedResidualAttentionBlock
 from .layernorm import CastLayerNorm
 from .patch_dropout import PatchDropout
