@@ -1,34 +1,19 @@
 # %%
 import os
-from pathlib import Path
 
 import gated_tree_clip.nn as gtnn
 import open_clip
 import requests
 import torch
 import torchinfo
-from dotenv import load_dotenv
-from gated_tree_clip.utils.clogging import getColoredLogger
 from PIL import Image
 from torchvision import transforms
-
-load_dotenv()
+from utils.clogging import getColoredLogger
+from utils.initialize import initializer
 
 logger = getColoredLogger(__name__)
 logger.setLevel("INFO")
-
-datasets_dir = Path.home() / "datasets"
-pwd = Path.cwd() if globals().get("__file__", None) is None else Path(__file__).parent
-logger.info(f"{pwd=}")
-
-HUGGINGFACE_HUB_CACHE = os.environ.get("HUGGINGFACE_HUB_CACHE", None)
-logger.info(f"{HUGGINGFACE_HUB_CACHE=}")
-
-CONTROL_SERVER_PREFIX = os.environ.get("CONTROL_SERVER_PREFIX", None)
-if CONTROL_SERVER_PREFIX is not None:
-    HOSTNAME = os.uname()[1]
-    assert not HOSTNAME.startswith(CONTROL_SERVER_PREFIX), f"{HOSTNAME=}, {CONTROL_SERVER_PREFIX=}"
-    logger.info(f"{HOSTNAME=}, {CONTROL_SERVER_PREFIX=}")
+initializer(globals(), logger=logger)
 
 
 # %%
@@ -95,7 +80,7 @@ def convert_model_params_laion2b_s34b_b79k_to_CLIPBase512(model_laion2b_s34b_b79
 
 tokenizer = open_clip.get_tokenizer("ViT-B-32")
 openclip_model, _, transform_openclip = open_clip.create_model_and_transforms(
-    "ViT-B-32", pretrained="laion2b_s34b_b79k", cache_dir=HUGGINGFACE_HUB_CACHE
+    "ViT-B-32", pretrained="laion2b_s34b_b79k", cache_dir=os.environ.get("HUGGINGFACE_HUB_CACHE", None)
 )
 openclip_model.eval()
 
