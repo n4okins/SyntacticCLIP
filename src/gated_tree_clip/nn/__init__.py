@@ -1,7 +1,8 @@
 from .attention import MultiheadAttention, ResidualAttentionBlock
 from .clip import CLIPBase, CLIPEncoder, GatedTreeCLIP
 from .gated_attention import GatedMultiheadAttention, GatedResidualAttentionBlock
-from .gated_tree_transformer import GatedTreeTextTransformer, GatedTreeVisionTransformer
+
+# from .gated_tree_transformer import GatedTreeTextTransformer, GatedTreeVisionTransformer
 from .layernorm import CastLayerNorm
 from .layerscale import LayerScale
 from .patch_dropout import PatchDropout
@@ -21,6 +22,6 @@ __all__ = [
     "TextTransformer",
     "Transformer",
     "VisionTransformer",
-    "GatedTreeTextTransformer",
-    "GatedTreeVisionTransformer",
+    # "GatedTreeTextTransformer",
+    # "GatedTreeVisionTransformer",
 ]

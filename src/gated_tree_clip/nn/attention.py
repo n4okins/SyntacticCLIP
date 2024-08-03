@@ -21,8 +21,8 @@ class MultiheadAttention(nn.Module):
     """
 
     __constants__ = ["batch_first"]
-    bias_key: Optional[torch.Tensor]
-    bias_value: Optional[torch.Tensor]
+    bias_k: Optional[torch.Tensor]
+    bias_v: Optional[torch.Tensor]
 
     def __init__(
         self,
@@ -63,12 +63,12 @@ class MultiheadAttention(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         self.in_proj_weight: Optional[nn.Parameter]
-        self.p_proj_weight: Optional[nn.Parameter]
+        self.q_proj_weight: Optional[nn.Parameter]
         self.k_proj_weight: Optional[nn.Parameter]
         self.v_proj_weight: Optional[nn.Parameter]
 
         if not self._qkv_same_embed_dim:
-            self.p_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim), **device_and_dtypes))
+            self.q_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim), **device_and_dtypes))
             self.k_proj_weight = nn.Parameter(torch.empty((embed_dim, self.kdim), **device_and_dtypes))
             self.v_proj_weight = nn.Parameter(torch.empty((embed_dim, self.vdim), **device_and_dtypes))
             self.register_buffer("in_proj_weight", None)
@@ -117,21 +117,21 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         query: torch.Tensor,
-        key: Optional[torch.Tensor],
-        value: Optional[torch.Tensor],
+        key: torch.Tensor,
+        value: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
         need_weights: bool = True,
         attn_mask: Optional[torch.Tensor] = None,
         average_attn_weights: bool = True,
         is_causal: bool = False,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        why_not_fast_path = ""
+        why_not_fast_pathes = []
         if (
             (attn_mask is not None and torch.is_floating_point(attn_mask))
             or (key_padding_mask is not None)
             and torch.is_floating_point(key_padding_mask)
         ):
-            why_not_fast_path = "floating-point masks are not supported for fast path."
+            why_not_fast_pathes.append("floating-point masks are not supported for fast path.")
 
         is_batched = query.dim() == 3
 
@@ -155,44 +155,47 @@ class MultiheadAttention(nn.Module):
         is_fastpath_enabled = torch.backends.mha.get_fastpath_enabled()
 
         if not is_fastpath_enabled:
-            why_not_fast_path = "torch.backends.mha.get_fastpath_enabled() was not True"
+            why_not_fast_pathes.append("torch.backends.mha.get_fastpath_enabled() was not True")
         elif not is_batched:
-            why_not_fast_path = f"input not batched; expected query.dim() of 3 but got {query.dim()}"
+            why_not_fast_pathes.append(f"input not batched; expected query.dim() of 3 but got {query.dim()}")
         elif query is not key or key is not value:
             # When lifting this restriction, don't forget to either
             # enforce that the dtypes all match or test cases where
             # they don't!
-            why_not_fast_path = "non-self attention was used (query, key, and value are not the same Tensor)"
+            why_not_fast_pathes.append("non-self attention was used (query, key, and value are not the same Tensor)")
         elif self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype:
-            why_not_fast_path = f"dtypes of query ({query.dtype}) and self.in_proj_bias ({self.in_proj_bias.dtype}) don't match"
+            why_not_fast_pathes.append(
+                f"dtypes of query ({query.dtype}) and self.in_proj_bias ({self.in_proj_bias.dtype}) don't match"
+            )
         elif self.in_proj_weight is None:
-            why_not_fast_path = "in_proj_weight was None"
+            why_not_fast_pathes.append("in_proj_weight was None")
         elif query.dtype != self.in_proj_weight.dtype:
             # this case will fail anyway, but at least they'll get a useful error message.
-            why_not_fast_path = (
+            why_not_fast_pathes.append(
                 f"dtypes of query ({query.dtype}) and self.in_proj_weight ({self.in_proj_weight.dtype}) don't match"
             )
         elif self.training:
-            why_not_fast_path = "training is enabled"
+            why_not_fast_pathes.append("training is enabled")
         elif (self.num_heads % 2) != 0:
-            why_not_fast_path = "self.num_heads is not even"
+            why_not_fast_pathes.append("self.num_heads is not even")
         elif not self.batch_first:
-            why_not_fast_path = "batch_first was not True"
+            why_not_fast_pathes.append("batch_first was not True")
         elif self.bias_k is not None:
-            why_not_fast_path = "self.bias_k was not None"
+            why_not_fast_pathes.append("self.bias_k was not None")
         elif self.bias_v is not None:
-            why_not_fast_path = "self.bias_v was not None"
+            why_not_fast_pathes.append("self.bias_v was not None")
         elif self.add_zero_attn:
-            why_not_fast_path = "add_zero_attn was enabled"
+            why_not_fast_pathes.append("add_zero_attn was enabled")
         elif not self._qkv_same_embed_dim:
-            why_not_fast_path = "_qkv_same_embed_dim was not True"
+            why_not_fast_pathes.append("_qkv_same_embed_dim was not True")
         elif query.is_nested and (key_padding_mask is not None or attn_mask is not None):
-            why_not_fast_path = "supplying both src_key_padding_mask and src_mask at the same time \
+            why_not_fast_pathes.append(
+                "supplying both src_key_padding_mask and src_mask at the same time \
                                  is not supported with NestedTensor input"
+            )
         elif torch.is_autocast_enabled():
-            why_not_fast_path = "autocast is enabled"
-
-        if not why_not_fast_path:
+            why_not_fast_pathes.append("autocast is enabled")
+        if not why_not_fast_pathes:
             tensor_args = (
                 query,
                 key,
@@ -205,13 +208,13 @@ class MultiheadAttention(nn.Module):
             # We have to use list comprehensions below because TorchScript does not support
             # generator expressions.
             if torch.overrides.has_torch_function(tensor_args):
-                why_not_fast_path = "some Tensor argument has_torch_function"
+                why_not_fast_pathes.append("some Tensor argument has_torch_function")
             elif not torch.jit.is_scripting() and any(
                 type(x) is torch.fx.experimental.proxy_tensor.ProxyTorchDispatchMode
                 for x in torch.utils._python_dispatch._get_current_dispatch_mode_stack()
             ):
                 # _is_make_fx_tracing()
-                why_not_fast_path = "we are running make_fx tracing"
+                why_not_fast_pathes.append("we are running make_fx tracing")
             elif not all(
                 x.device.type in ["cpu", "cuda", torch.utils.backend_registration._privateuse1_backend_name]
                 if x is not None
@@ -219,16 +222,17 @@ class MultiheadAttention(nn.Module):
                 for x in tensor_args
             ):
                 # _check_arg_device()
-                why_not_fast_path = (
+                why_not_fast_pathes.append(
                     "some Tensor argument's device is neither one of "
                     f"cpu, cuda or {torch.utils.backend_registration._privateuse1_backend_name}"
                 )
             elif torch.is_grad_enabled() and any(x.requires_grad if x is not None else False for x in tensor_args):
-                why_not_fast_path = (
+                why_not_fast_pathes.append(
                     "grad is enabled and at least one of query or the "
                     "input/output projection weights or biases requires_grad"
                 )
-            if not why_not_fast_path:
+
+            if not why_not_fast_pathes:
                 merged_mask, mask_type = self.merge_masks(attn_mask, key_padding_mask, query)
 
                 if self.in_proj_bias is not None and self.in_proj_weight is not None:
@@ -248,10 +252,13 @@ class MultiheadAttention(nn.Module):
                         mask_type,
                     )
 
+            else:
+                logger.warning(f"The fast path was not hit because {'\n - '.join(why_not_fast_pathes)}")
+
         any_nested = query.is_nested or key.is_nested or value.is_nested
         assert not any_nested, (
             "MultiheadAttention does not support NestedTensor outside of its fast path. "
-            + f"The fast path was not hit because {why_not_fast_path}"
+            + f"The fast path was not hit because {'\n - '.join(why_not_fast_pathes)}"
         )
 
         if self.batch_first and is_batched:
@@ -313,12 +320,12 @@ class MultiheadAttention(nn.Module):
                 is_causal=is_causal,
             )
         if self.batch_first and is_batched:
-            attn_output = attn_output.transpose(1, 0)
+            attn_output = attn_output.transpose(1, 0).contiguous()
 
         return attn_output, attn_output_weights
 
     def merge_masks(
-        self, attn_mask: Optional[torch.Tensor], key_padding_mask: Optional[torch.Tensor], query: torch.Tensor
+        self, attention_mask: Optional[torch.Tensor], key_padding_mask: Optional[torch.Tensor], query: torch.Tensor
     ) -> tuple[Optional[torch.Tensor], Optional[int]]:
         r"""Determine mask type and combine masks if necessary.
 
@@ -334,30 +341,28 @@ class MultiheadAttention(nn.Module):
             merged_mask: merged mask
             mask_type: merged mask type (0, 1, or 2)
         """
-        mask_type: Optional[int] = None
         merged_mask: Optional[torch.Tensor] = None
+        # mask_type = 1: key_padding_mask, 2: attn_mask, 3: key_padding_mask + attn_mask
+        mask_type: Optional[int] = None
 
         if key_padding_mask is not None:
             mask_type = 1
             merged_mask = key_padding_mask
 
-        if attn_mask is not None:
-            # In this branch query can't be a nested tensor, so it has a shape
+        if attention_mask is not None:
             batch_size, seq_len, _ = query.shape
             mask_type = 2
 
-            # Always expands attn_mask to 4D
-            if attn_mask.dim() == 3:
-                attn_mask_expanded = attn_mask.view(batch_size, -1, seq_len, seq_len)
+            if attention_mask.dim() == 3:
+                attention_mask_expanded = attention_mask.view(batch_size, -1, seq_len, seq_len)
             else:  # attn_mask.dim() == 2:
-                attn_mask_expanded = attn_mask.view(1, 1, seq_len, seq_len).expand(batch_size, self.num_heads, -1, -1)
-            merged_mask = attn_mask_expanded
+                attention_mask_expanded = attention_mask.view(1, 1, seq_len, seq_len).expand(batch_size, self.num_heads, -1, -1)
+            merged_mask = attention_mask_expanded
 
             if key_padding_mask is not None:
                 key_padding_mask_expanded = key_padding_mask.view(batch_size, 1, 1, seq_len).expand(-1, self.num_heads, -1, -1)
-                merged_mask = attn_mask_expanded + key_padding_mask_expanded
+                merged_mask = attention_mask_expanded + key_padding_mask_expanded
 
-        # no attn_mask and no key_padding_mask, returns None, None
         return merged_mask, mask_type
 
 

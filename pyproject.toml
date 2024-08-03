@@ -60,9 +60,10 @@ pythonpath = "src"
 
 [tool.mypy]
 exclude = [
-    ".venv/",
-    "ignores/",
+    "ignores/"
 ]
+ignore_missing_imports = true
+disable_error_code = "import-untyped"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gated_tree_clip"]

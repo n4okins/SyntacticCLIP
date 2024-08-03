@@ -89,7 +89,7 @@ class CLIPBase(nn.Module):
         Returns:
             torch.Tensor: [B, D], D=visual.embed_dim
         """
-        feats, _ = self.visual(images)
+        feats = self.visual(images)
         if normalize:
             feats /= feats.norm(dim=-1, keepdim=True)
         return feats
@@ -102,7 +102,7 @@ class CLIPBase(nn.Module):
         Returns:
             torch.Tensor: [B, D], D=textual.embed_dim
         """
-        feats, _ = self.textual(tokens)
+        feats = self.textual(tokens)
         if normalize:
             feats /= feats.norm(dim=-1, keepdim=True)
         return feats

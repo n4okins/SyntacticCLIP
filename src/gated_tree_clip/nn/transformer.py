@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, override
 
 import torch
 import torch.nn as nn
@@ -146,7 +146,10 @@ class VisionTransformer(Transformer):
 
         self.head_weight = nn.Parameter(self.scale * torch.randn(patch_embed_dim, embed_dim))
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    @override
+    def forward(
+        self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, is_checkpoint: bool = False
+    ) -> torch.Tensor:
         """
         Args:
             x: [batch, channels, height, width]
@@ -169,16 +172,17 @@ class VisionTransformer(Transformer):
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, num_patches + 1, self.patch_embed_dim]
         x = self.patchdropout_pre(x)
         x = self.layernorm_pre(x)
-        x = super().forward(x)
+        x = super().forward(x, attention_mask=attention_mask, is_checkpoint=is_checkpoint)
         x = self.layernorm_post(x)
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, self.patch_embed_dim], [batch, num_patches, self.patch_embed_dim]
-        pooled, tokens = x[:, 0], x[:, 1:]
+        # _tokens: unused
+        pooled, _tokens = x[:, 0], x[:, 1:]
 
         # [batch, self.patch_embed_dim] -> [batch, self.embed_dim]
         pooled = pooled @ self.head_weight
 
-        return pooled, tokens
+        return pooled
 
 
 class TextTransformer(Transformer):
@@ -227,20 +231,24 @@ class TextTransformer(Transformer):
 
         self.head_weight = nn.Parameter(torch.randn(vocab_embed_dim, embed_dim))
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    @override
+    def forward(
+        self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, is_checkpoint: bool = False
+    ) -> torch.Tensor:
         """
         Args:
             x: [batch, sequence_length]
         """
-        x_in = x
+        x_ = x
         batch_size, sequence_length = x.shape
 
         x = self.embedding(x)
         x = x + self.positional_embedding[:sequence_length]
-        x = super().forward(x, attention_mask=self.attention_mask)
+        x = super().forward(x, attention_mask=attention_mask or self.attention_mask, is_checkpoint=is_checkpoint)
         x = self.layernorm_post(x)
 
-        pooled, tokens = x[torch.arange(batch_size), x_in.argmax(dim=-1)], x
+        # _tokens: unused
+        pooled, _tokens = x[torch.arange(batch_size), x_.argmax(dim=-1)], x
         pooled = pooled @ self.head_weight
 
-        return pooled, tokens
+        return pooled
