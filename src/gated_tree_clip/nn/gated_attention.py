@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.clogging import getColoredLogger
 
-from .from_fairseq import FairseqDropout
 from .layernorm import CastLayerNorm
 from .layerscale import LayerScale
 
@@ -15,70 +14,32 @@ logger = getColoredLogger(__name__)
 __all__ = ["GatedResidualAttentionBlock", "GatedMultiheadAttention"]
 
 
-class SyntacticDistanceGate(nn.Module):
-    # from ParsingNetwork
-    # https://github.com/yikangshen/PRPN/blob/42212fb5ed4234f507137eb05af26a810c1cd33a/ParsingNetwork.py#L8
-    def __init__(
-        self,
-        in_channels: int,
-        hidden_channels: int,
-        *,
-        num_lookback_range: int = 3,
-        dropout: float = 0.0,
-        bias: bool = True,
-        activation_fn: Optional[Callable] = None,
-    ):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = hidden_channels
-        self.bias = bias
-        self.conv = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, hidden_channels, kernel_size=(num_lookback_range + 1), bias=bias),
-            nn.BatchNorm1d(hidden_channels),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(hidden_channels, 2, kernel_size=1, groups=2, bias=bias),
-            nn.Sigmoid(),
-        )
-        self.activation_fn = activation_fn or nn.Tanh()
-
-    def forward(self, key: torch.Tensor) -> torch.Tensor:
-        # key us sane as key used in multihead attention
-        # key: (batch_size, seq_len, embed_dim)
-        return key
-
-
-class GatedMultiheadAttention(nn.Module):
-    """Multi-headed attention.
-    See "Attention Is All You Need" for more details.
-    """
-
+class MultiheadAttention(nn.Module):
     __constants__ = ["batch_first"]
     bias_k: Optional[torch.Tensor]
     bias_v: Optional[torch.Tensor]
 
     def __init__(
         self,
-        embed_dim,
-        num_heads,
-        dropout=0.0,
-        bias=True,
-        add_bias_kv=False,
-        add_zero_attn=False,
-        kdim=None,
-        vdim=None,
-        batch_first=False,
-        device=None,
-        dtype=None,
-        use_fairseq_dropout: bool = True,
+        embed_dim: int,
+        num_heads: int,
+        *,
+        dropout: float = 0.0,
+        bias: bool = True,
+        add_bias_kv: bool = False,
+        add_zero_attn: bool = False,
+        kdim: int = None,
+        vdim: int = None,
+        batch_first: bool = False,
+        device: torch.device | str = None,
+        dtype: torch.dtype = None,
     ):
-        if embed_dim <= 0 or num_heads <= 0:
-            raise ValueError(
-                f"embed_dim and num_heads must be greater than 0,"
-                f" got embed_dim={embed_dim} and num_heads={num_heads} instead"
-            )
+        assert embed_dim > 0, f"embed_dim must be greater than 0, got {embed_dim}"
+        assert num_heads > 0, f"num_heads must be greater than 0, got {num_heads}"
+        assert embed_dim % num_heads == 0, f"embed_dim must be divisible by num_heads, got {embed_dim} and {num_heads}"
+
         device_and_dtypes = {"device": device, "dtype": dtype}
+
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -89,14 +50,12 @@ class GatedMultiheadAttention(nn.Module):
         self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
         self.num_heads = num_heads
-        self.dropout = (
-            FairseqDropout(dropout, module_name=self.__class__.__name__) if use_fairseq_dropout else nn.Dropout(dropout)
-        )
+        self.dropout = nn.Dropout(dropout)
 
         self.head_dim = embed_dim // num_heads
-        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         self.in_proj_weight: Optional[nn.Parameter]
+
         self.q_proj_weight: Optional[nn.Parameter]
         self.k_proj_weight: Optional[nn.Parameter]
         self.v_proj_weight: Optional[nn.Parameter]
@@ -113,6 +72,7 @@ class GatedMultiheadAttention(nn.Module):
             self.register_buffer("v_proj_weight", None)
 
         self.in_proj_bias: Optional[nn.Parameter]
+
         if bias:
             self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **device_and_dtypes))
         else:
@@ -124,7 +84,8 @@ class GatedMultiheadAttention(nn.Module):
             self.bias_k = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
             self.bias_v = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
         else:
-            self.bias_k = self.bias_v = None
+            self.register_buffer("bias_k", None)
+            self.register_buffer("bias_v", None)
 
         self.add_zero_attn = add_zero_attn
         self._reset_parameters()
@@ -133,7 +94,6 @@ class GatedMultiheadAttention(nn.Module):
         if self._qkv_same_embed_dim:
             nn.init.xavier_uniform_(self.in_proj_weight, gain=1 / math.sqrt(2))
         else:
-            # gain=1 / math.sqrt(2)
             nn.init.xavier_uniform_(self.k_proj_weight)
             nn.init.xavier_uniform_(self.v_proj_weight)
             nn.init.xavier_uniform_(self.q_proj_weight)
@@ -142,7 +102,6 @@ class GatedMultiheadAttention(nn.Module):
 
         if self.out_proj.bias is not None:
             nn.init.constant_(self.out_proj.bias, 0.0)
-
         if self.bias_k is not None:
             nn.init.xavier_normal_(self.bias_k)
         if self.bias_v is not None:
@@ -151,23 +110,22 @@ class GatedMultiheadAttention(nn.Module):
     def forward(
         self,
         query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
+        key: Optional[torch.Tensor] = None,
+        value: Optional[torch.Tensor] = None,
+        *,
         key_padding_mask: Optional[torch.Tensor] = None,
         need_weights: bool = True,
         attn_mask: Optional[torch.Tensor] = None,
         average_attn_weights: bool = True,
         is_causal: bool = False,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        why_not_fast_pathes = []
-        if (
-            (attn_mask is not None and torch.is_floating_point(attn_mask))
-            or (key_padding_mask is not None)
-            and torch.is_floating_point(key_padding_mask)
-        ):
-            why_not_fast_pathes.append("floating-point masks are not supported for fast path.")
+        """
+        input shape: (seq_len, batch_size, embed_dim) or (batch_size, seq_len, embed_dim)
+        """
 
-        is_batched = query.dim() == 3
+        is_batched_query = query.dim() == 3
+        key = key if key is not None else query
+        value = value if value is not None else query
 
         key_padding_mask = F._canonical_mask(
             mask=key_padding_mask,
@@ -176,7 +134,6 @@ class GatedMultiheadAttention(nn.Module):
             other_name="attn_mask",
             target_type=query.dtype,
         )
-
         attn_mask = F._canonical_mask(
             mask=attn_mask,
             mask_name="attn_mask",
@@ -185,128 +142,29 @@ class GatedMultiheadAttention(nn.Module):
             target_type=query.dtype,
             check_other=False,
         )
-
-        is_fastpath_enabled = torch.backends.mha.get_fastpath_enabled()
-
-        if not is_fastpath_enabled:
-            why_not_fast_pathes.append("torch.backends.mha.get_fastpath_enabled() was not True")
-        elif not is_batched:
-            why_not_fast_pathes.append(f"input not batched; expected query.dim() of 3 but got {query.dim()}")
-        elif query is not key or key is not value:
-            # When lifting this restriction, don't forget to either
-            # enforce that the dtypes all match or test cases where
-            # they don't!
-            why_not_fast_pathes.append("non-self attention was used (query, key, and value are not the same Tensor)")
-        elif self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype:
-            why_not_fast_pathes.append(
-                f"dtypes of query ({query.dtype}) and self.in_proj_bias ({self.in_proj_bias.dtype}) don't match"
+        merged_mask, mask_type = self.merge_masks(attn_mask, key_padding_mask, query)
+        use_fast_path = any(
+            (
+                not torch.backends.mha.get_fastpath_enabled(),
+                not is_batched_query,
+                query is not key or key is not value,
+                self.in_proj_weight is None,
+                self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype,
+                query.dtype != self.in_proj_weight.dtype,
+                self.training,
+                self.num_heads % 2 != 0,
+                not self.batch_first,
+                self.bias_k is not None or self.bias_v is not None,
+                self.add_zero_attn,
+                not self._qkv_same_embed_dim,
+                query.is_nested and (key_padding_mask is not None or attn_mask is not None),
+                torch.is_autocast_enabled(),
             )
-        elif self.in_proj_weight is None:
-            why_not_fast_pathes.append("in_proj_weight was None")
-        elif query.dtype != self.in_proj_weight.dtype:
-            # this case will fail anyway, but at least they'll get a useful error message.
-            why_not_fast_pathes.append(
-                f"dtypes of query ({query.dtype}) and self.in_proj_weight ({self.in_proj_weight.dtype}) don't match"
-            )
-        elif self.training:
-            why_not_fast_pathes.append("training is enabled")
-        elif (self.num_heads % 2) != 0:
-            why_not_fast_pathes.append("self.num_heads is not even")
-        elif not self.batch_first:
-            why_not_fast_pathes.append("batch_first was not True")
-        elif self.bias_k is not None:
-            why_not_fast_pathes.append("self.bias_k was not None")
-        elif self.bias_v is not None:
-            why_not_fast_pathes.append("self.bias_v was not None")
-        elif self.add_zero_attn:
-            why_not_fast_pathes.append("add_zero_attn was enabled")
-        elif not self._qkv_same_embed_dim:
-            why_not_fast_pathes.append("_qkv_same_embed_dim was not True")
-        elif query.is_nested and (key_padding_mask is not None or attn_mask is not None):
-            why_not_fast_pathes.append(
-                "supplying both src_key_padding_mask and src_mask at the same time \
-                                 is not supported with NestedTensor input"
-            )
-        elif torch.is_autocast_enabled():
-            why_not_fast_pathes.append("autocast is enabled")
-        if not why_not_fast_pathes:
-            tensor_args = (
-                query,
-                key,
-                value,
-                self.in_proj_weight,
-                self.in_proj_bias,
-                self.out_proj.weight,
-                self.out_proj.bias,
-            )
-            # We have to use list comprehensions below because TorchScript does not support
-            # generator expressions.
-            if torch.overrides.has_torch_function(tensor_args):
-                why_not_fast_pathes.append("some Tensor argument has_torch_function")
-            elif not torch.jit.is_scripting() and any(
-                type(x) is torch.fx.experimental.proxy_tensor.ProxyTorchDispatchMode
-                for x in torch.utils._python_dispatch._get_current_dispatch_mode_stack()
-            ):
-                # _is_make_fx_tracing()
-                why_not_fast_pathes.append("we are running make_fx tracing")
-            elif not all(
-                x.device.type in ["cpu", "cuda", torch.utils.backend_registration._privateuse1_backend_name]
-                if x is not None
-                else True
-                for x in tensor_args
-            ):
-                # _check_arg_device()
-                why_not_fast_pathes.append(
-                    "some Tensor argument's device is neither one of "
-                    f"cpu, cuda or {torch.utils.backend_registration._privateuse1_backend_name}"
-                )
-            elif torch.is_grad_enabled() and any(x.requires_grad if x is not None else False for x in tensor_args):
-                why_not_fast_pathes.append(
-                    "grad is enabled and at least one of query or the "
-                    "input/output projection weights or biases requires_grad"
-                )
-
-            if not why_not_fast_pathes:
-                merged_mask, mask_type = self.merge_masks(attn_mask, key_padding_mask, query)
-
-                if self.in_proj_bias is not None and self.in_proj_weight is not None:
-                    return torch._native_multi_head_attention(
-                        query,
-                        key,
-                        value,
-                        self.embed_dim,
-                        self.num_heads,
-                        self.in_proj_weight,
-                        self.in_proj_bias,
-                        self.out_proj.weight,
-                        self.out_proj.bias,
-                        merged_mask,
-                        need_weights,
-                        average_attn_weights,
-                        mask_type,
-                    )
-
-            else:
-                logger.warning(f"The fast path was not hit because {'\n - '.join(why_not_fast_pathes)}")
-
-        any_nested = query.is_nested or key.is_nested or value.is_nested
-        assert not any_nested, (
-            "MultiheadAttention does not support NestedTensor outside of its fast path. "
-            + f"The fast path was not hit because {'\n - '.join(why_not_fast_pathes)}"
         )
 
-        if self.batch_first and is_batched:
-            if key is value:
-                if query is key:
-                    query = key = value = query.transpose(1, 0)
-                else:
-                    query, key = (x.transpose(1, 0) for x in (query, key))
-                    value = key
-            else:
-                query, key, value = (x.transpose(1, 0) for x in (query, key, value))
-
-        if not self._qkv_same_embed_dim:
-            attn_output, attn_output_weights = F.multi_head_attention_forward(
+        if not use_fast_path and self._qkv_same_embed_dim and self.in_proj_bias is not None:
+            # if self.in_proj_bias is not None and self.in_proj_weight is not None:
+            return torch._native_multi_head_attention(
                 query,
                 key,
                 value,
@@ -314,47 +172,56 @@ class GatedMultiheadAttention(nn.Module):
                 self.num_heads,
                 self.in_proj_weight,
                 self.in_proj_bias,
-                self.bias_k,
-                self.bias_v,
-                self.add_zero_attn,
-                self.dropout.p,
                 self.out_proj.weight,
                 self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask,
-                need_weights=need_weights,
-                attn_mask=attn_mask,
+                merged_mask,
+                need_weights,
+                average_attn_weights,
+                mask_type,
+            )
+
+        assert not (query.is_nested or key.is_nested or value.is_nested), "MultiheadAttention does not support NestedTensor."
+
+        if self.batch_first and is_batched_query:
+            assert key.dim() == 3, f"key must have 3 dimensions (batch_size, seq_len, embed_dim), got {key.dim()}"
+            assert value.dim() == 3, f"value must have 3 dimensions (batch_size, seq_len, embed_dim), got {value.dim()}"
+            query = query.transpose(1, 0)
+            key = key.transpose(1, 0)
+            value = value.transpose(1, 0)
+
+        multi_head_attention_forward_kwargs = dict(
+            query=query,
+            key=key,
+            value=value,
+            embed_dim_to_check=self.embed_dim,
+            num_heads=self.num_heads,
+            in_proj_weight=self.in_proj_weight,
+            in_proj_bias=self.in_proj_bias,
+            bias_k=self.bias_k,
+            bias_v=self.bias_v,
+            add_zero_attn=self.add_zero_attn,
+            dropout_p=self.dropout.p,
+            out_proj_weight=self.out_proj.weight,
+            out_proj_bias=self.out_proj.bias,
+            training=self.training,
+            key_padding_mask=key_padding_mask,
+            need_weights=need_weights,
+            attn_mask=attn_mask,
+            average_attn_weights=average_attn_weights,
+            is_causal=is_causal,
+        )
+        if not self._qkv_same_embed_dim:
+            multi_head_attention_forward_kwargs.update(
                 use_separate_proj_weight=True,
                 q_proj_weight=self.q_proj_weight,
                 k_proj_weight=self.k_proj_weight,
                 v_proj_weight=self.v_proj_weight,
-                average_attn_weights=average_attn_weights,
-                is_causal=is_causal,
             )
-        else:
-            attn_output, attn_output_weights = F.multi_head_attention_forward(
-                query,
-                key,
-                value,
-                self.embed_dim,
-                self.num_heads,
-                self.in_proj_weight,
-                self.in_proj_bias,
-                self.bias_k,
-                self.bias_v,
-                self.add_zero_attn,
-                self.dropout.p,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask,
-                need_weights=need_weights,
-                attn_mask=attn_mask,
-                average_attn_weights=average_attn_weights,
-                is_causal=is_causal,
-            )
-        if self.batch_first and is_batched:
-            attn_output = attn_output.transpose(1, 0).contiguous()
+
+        attn_output, attn_output_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
+
+        if self.batch_first and is_batched_query:
+            attn_output = attn_output.transpose(1, 0)
 
         return attn_output, attn_output_weights
 
@@ -398,93 +265,3 @@ class GatedMultiheadAttention(nn.Module):
                 merged_mask = attention_mask_expanded + key_padding_mask_expanded
 
         return merged_mask, mask_type
-
-
-class GatedResidualAttentionBlock(nn.Module):
-    """Residual Attention Block
-    Args:
-        embed_dim (int): Embedding dimension
-        res_mlp_dim (Optional[int]): Residual MLP dimension
-        res_mlp (Optional[nn.Module]): Residual MLP
-        num_heads (int): Number of heads
-        batch_first (bool): Batch first
-        is_cross_attention (bool): Cross attention
-        init_layer_scale_ratio (Optional[float]): Initial layer scale ratio
-    """
-
-    def __init__(
-        self,
-        embed_dim: int = 512,
-        num_heads: int = 8,
-        batch_first: bool = True,
-        *,
-        res_mlp: Optional[nn.Module] = None,
-        res_mlp_dim: Optional[int] = None,
-        is_cross_attention: bool = False,
-        init_layer_scale_ratio: Optional[float] = None,
-    ) -> None:
-        super().__init__()
-        res_mlp_dim = res_mlp_dim or embed_dim * 4
-
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.batch_first = batch_first
-        self.is_cross_attention = is_cross_attention
-        self.init_layer_scale_ratio = init_layer_scale_ratio
-
-        self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
-        self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
-
-        self.attention = GatedMultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
-
-        self.layer_scale_1 = (
-            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
-            if init_layer_scale_ratio
-            else nn.Identity()
-        )
-        self.layer_norm_2 = CastLayerNorm(normalized_shape=embed_dim)
-
-        self.res_mlp = (
-            res_mlp
-            if res_mlp
-            else nn.Sequential(
-                nn.Linear(in_features=embed_dim, out_features=res_mlp_dim),
-                nn.GELU(),
-                nn.Linear(in_features=res_mlp_dim, out_features=embed_dim),
-            )
-        )
-
-        self.layer_scale_2 = (
-            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
-            if init_layer_scale_ratio
-            else nn.Identity()
-        )
-
-    def forward(
-        self,
-        query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        attention_mask = attention_mask.to(query.dtype) if attention_mask is not None else None
-
-        _normed_query = self.layer_norm_1(query)
-        key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
-        value = self.layer_norm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
-
-        attention_out, _ = self.attention(
-            _normed_query,
-            key,
-            value,
-            need_weights=False,
-            attn_mask=attention_mask,
-        )
-
-
-
-        print(attention_out.shape)
-
-        x = query + self.layer_scale_1(attention_out)
-        x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
-        return x

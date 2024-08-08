@@ -18,4 +18,4 @@ wheels/
 ignores/
 models/
 
-main.py
+*.out

@@ -1,20 +1,22 @@
+# %%
 import math
-from typing import Optional
+from typing import Any, Callable, Optional, override
 
+import gated_tree_clip.nn as gtcnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils.clogging import getColoredLogger
-
-from .layernorm import CastLayerNorm
-from .layerscale import LayerScale
+from utils.initialize import initializer
 
 logger = getColoredLogger(__name__)
+logger.setLevel("INFO")
+initializer(globals(), logger=logger)
 
-__all__ = ["ResidualAttentionBlock", "MultiheadAttention"]
+# %%
 
 
-class MultiheadAttention(nn.Module):
+class MultiheadAttentionWithGate(nn.Module):
     __constants__ = ["batch_first"]
     bias_k: Optional[torch.Tensor]
     bias_v: Optional[torch.Tensor]
@@ -116,6 +118,7 @@ class MultiheadAttention(nn.Module):
         key_padding_mask: Optional[torch.Tensor] = None,
         need_weights: bool = True,
         attn_mask: Optional[torch.Tensor] = None,
+        attn_gate: Optional[torch.Tensor] = None,
         average_attn_weights: bool = True,
         is_causal: bool = False,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
@@ -223,6 +226,10 @@ class MultiheadAttention(nn.Module):
         if self.batch_first and is_batched_query:
             attn_output = attn_output.transpose(1, 0)
 
+        if attn_gate is not None:
+            print(attn_output.shape, attn_gate.shape)
+            attn_output = torch.mul(attn_output, attn_gate)
+            attn_output /= attn_output.sum(dim=-1, keepdim=True) + 1e-12
         return attn_output, attn_output_weights
 
     def merge_masks(
@@ -267,8 +274,79 @@ class MultiheadAttention(nn.Module):
         return merged_mask, mask_type
 
 
-class ResidualAttentionBlock(nn.Module):
-    """Residual Attention Block
+class SyntacticDistanceGate(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        kernel_size: int,
+        *,
+        tau: float = 1.0,
+        dropout: float = 0.0,
+        batch_first: bool = True,
+        distance_activation_fn: Optional[Callable] = None,
+    ):
+        super().__init__()
+        self.lookback_range = kernel_size
+        self.batch_first = batch_first
+        self.tau = tau
+        self.conv = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, in_channels, 1),
+            nn.BatchNorm1d(in_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, in_channels, 1),
+            nn.BatchNorm1d(in_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, 1, kernel_size, padding=kernel_size),
+        )
+        self.distance_activation_fn = distance_activation_fn or nn.Tanh()
+
+    def forward(self, x: torch.Tensor):
+        # x: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
+        # gate: (batch_size, seq_len, seq_len)
+        # distance: (batch_size, seq_len, 1)
+
+        if self.batch_first:
+            x = x.transpose(1, 2)
+        else:
+            x = x.permute(1, 2, 0)
+
+        batch_size, embed_dim, seq_len = x.size()
+
+        # distance: Syntactic Distance [d_i, ...]: i番目の単語の構文距離 (構文高？)
+        # distance := distance  (batch_size, seq_len, 1)
+        # distance[i] = \tanh(W_D [k_{i-M}, k_{i-M+1}, ..., K_{i}]^{\top} + b_D)
+        # conv_input: (batch_size, embed_dim, seq_len)
+        distance = self.conv(x)
+        # conv_output: (batch_size, distance_dim, seq_len + lookback_range)
+        distance = distance[:, :, 1 : -self.lookback_range]
+        distance = self.distance_activation_fn(distance)
+        distance = distance.squeeze(1).unsqueeze(2).contiguous()
+        # distance := distance  (batch_size, seq_len, 1)
+
+        logits = F.hardtanh((distance - distance.transpose(2, 1)) * self.tau)
+        left = logits.tril(diagonal=-1) + torch.ones_like(logits).triu(diagonal=0)
+        left = left.flip([-1]).cumprod(dim=-1).flip([-1])  # reverse
+        right = logits.triu(diagonal=1) + torch.ones_like(logits).tril(diagonal=0)
+        right = right.cumprod(dim=-1)
+
+        gate = torch.mul(left, right).contiguous()
+
+        # t: 現在注目している単語の位置
+        # prob_alpha: probability value that represents the syntactic relation ship of distance d_{j} and d_{t}
+        # prob_alpha := prob_alpha (batch_size, seq_len, seq_len), 0 <= prob_alpha <= 1
+        # prob_alpha[t][j]: a_{j}^{t} = (hardtanh((d_{t} - d_{j}) * tau) + 1) / 2
+
+        # gate: attention gate values. where t is the current time step. a_{j}^{t} is syntactic relationship between d_{j} and d_{t}
+        # gate: (batch_size, seq_len, seq_len), 0 <= gate <= 1
+        # gate_{i}^{t} = prod_{j=i+1}^{t-1} a_{j}^{t}
+        return gate, distance
+
+
+class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
+    """residual attention with syntactic distance block
     Args:
         embed_dim (int): Embedding dimension
         res_mlp_dim (Optional[int]): Residual MLP dimension
@@ -299,17 +377,18 @@ class ResidualAttentionBlock(nn.Module):
         self.is_cross_attention = is_cross_attention
         self.init_layer_scale_ratio = init_layer_scale_ratio
 
-        self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
-        self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
+        self.layer_norm_1 = gtcnn.CastLayerNorm(normalized_shape=embed_dim)
+        self.layer_norm_1_kv = gtcnn.CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
 
-        self.attention = MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = MultiheadAttentionWithGate(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.gate = SyntacticDistanceGate(in_channels=embed_dim, kernel_size=3, batch_first=batch_first)
 
         self.layer_scale_1 = (
-            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
+            gtcnn.LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
             if init_layer_scale_ratio
             else nn.Identity()
         )
-        self.layer_norm_2 = CastLayerNorm(normalized_shape=embed_dim)
+        self.layer_norm_2 = gtcnn.CastLayerNorm(normalized_shape=embed_dim)
 
         self.res_mlp = (
             res_mlp
@@ -322,7 +401,7 @@ class ResidualAttentionBlock(nn.Module):
         )
 
         self.layer_scale_2 = (
-            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
+            gtcnn.LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
             if init_layer_scale_ratio
             else nn.Identity()
         )
@@ -333,6 +412,7 @@ class ResidualAttentionBlock(nn.Module):
         key: Optional[torch.Tensor] = None,
         value: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        attention_gate: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         attention_mask = attention_mask.to(query.dtype) if attention_mask is not None else None
 
@@ -340,14 +420,67 @@ class ResidualAttentionBlock(nn.Module):
         key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
         value = self.layer_norm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
 
+        attention_gate, distance = self.gate(key)
         attention_out, _ = self.attention(
             _normed_query,
             key,
             value,
             need_weights=False,
             attn_mask=attention_mask,
+            attn_gate=attention_gate,
         )
 
         x = query + self.layer_scale_1(attention_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
-        return x
+        return x, distance
+
+
+x = torch.randn(3, 9, 4)
+block = ResidualAttentionWithSyntacticDistanceBlock(embed_dim=4, num_heads=2, batch_first=True)
+
+y, d = block(x)
+print(y.size(), d.size())
+# batch_size = 6
+# seq_len = 9
+# embed_dim = 4
+# kernel_size = 3
+# syntactic_distance_gate = SyntacticDistanceGate(embed_dim, kernel_size, batch_first=True)
+# x = torch.stack([torch.ones(batch_size, seq_len, embed_dim, requires_grad=True).triu(k) for k in range(embed_dim)]).sum(dim=0)
+# gate, distance = syntactic_distance_gate(x)
+# print(distance.size(), gate.size())
+# %%
+
+
+# SeqL = 9
+# KernelSize = 3
+
+# attn:
+# 0: [0.1, 0.2, 0.3, 0.4, 0.5]
+# 1: [0.0, 0.1, 0.2, 0.3, 0.4]
+# 2: [0.0, 0.0, 0.1, 0.2, 0.3]
+# 3: [0.0, 0.0, 0.0, 0.1, 0.2]
+# 4: [0.0, 0.0, 0.0, 0.0, 0.1]
+
+# gate:
+# gate_{0,0} = 0
+# gate_{0,1} = cumprod_{j=1 to 0} attn_{0,j} = 0
+# gate_{0,2} = cumprod_{j=2 to 1} attn_{0,j} = 0
+
+# *** Conv1D ***
+# pl0 pl1 pl2 0 1 2 3 4 5 6 7 8 pr0 pr1 pr2
+
+
+# Output:
+# 0: W[pl0 pl1 pl2] + B
+# 1: W[pl1 pl2 0] + B = d0
+# 2: W[pl2 0 1] + B = d1
+# 3: W[0 1 2] + B = d2
+# 4: W[1 2 3] + B = d3
+# 5: W[2 3 4] + B = d4
+# 6: W[3 4 5] + B = d5
+# 7: W[4 5 6] + B = d6
+# 8: W[5 6 7] + B = d7
+# 9: W[6 7 8] + B = d8
+# 10: W[7 8 pr0] + B
+# 11: W[8 pr0 pr1] + B
+# 12: W[pr0 pr1 pr2] + B
