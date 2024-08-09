@@ -350,13 +350,13 @@ class SyntacticDistanceGate(nn.Module):
         distance = distance[:, :, 1 : -self.lookback_range]
         distance = self.distance_activation_fn(distance)
         distance = distance.transpose(2, 1).contiguous()
-        # distance := distance  (batch_size, seq_len, 1)
 
         alpha = (F.hardtanh((distance - distance.transpose(2, 1)) * self.tau) + 1) / 2
         lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
         upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
         gate = lower_tri * upper_tri
-        # gate := gate  (batch_size, seq_len, seq_len)
+        # gate := gate  (batch_size, seq_len, seq_len), 0 <= gate <= 1
+        # distance := distance  (batch_size, seq_len, 1), -1 <= distance <= 1
         return gate, distance
 
 
@@ -461,7 +461,7 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
 x = torch.randn(2, 9, 4)
 block = ResidualAttentionWithSyntacticDistanceBlock(embed_dim=4, num_heads=2, batch_first=True)
 
-y, d = block(x, attn_gate=torch.ones(2, 9, 9))
+y, d = block(x, attn_gate=torch.rand(2, 9, 9))
 print(y.size(), d.size())
 # batch_size = 6
 # seq_len = 9
