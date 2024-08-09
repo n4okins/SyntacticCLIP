@@ -82,6 +82,7 @@ class MultiheadAttentionWithGate(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias, **device_and_dtypes)
 
+        self.add_bias_kv = add_bias_kv
         if add_bias_kv:
             self.bias_k = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
             self.bias_v = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
@@ -90,7 +91,9 @@ class MultiheadAttentionWithGate(nn.Module):
             self.register_buffer("bias_v", None)
 
         self.add_zero_attn = add_zero_attn
+        self.scaling = self.head_dim ** -0.5
         self._reset_parameters()
+
 
     def _reset_parameters(self):
         if self._qkv_same_embed_dim:
@@ -126,9 +129,17 @@ class MultiheadAttentionWithGate(nn.Module):
         input shape: (seq_len, batch_size, embed_dim) or (batch_size, seq_len, embed_dim)
         """
 
-        is_batched_query = query.dim() == 3
         key = key if key is not None else query
         value = value if value is not None else query
+
+        for v in (query, key, value):
+            if v.dim() == 2:
+                if self.batch_first:
+                    v.unsqueeze_(0)
+                else:
+                    v.unsqueeze_(1)
+        
+        batch_size, seq_len, _ = query.size()
 
         key_padding_mask = F._canonical_mask(
             mask=key_padding_mask,
@@ -149,7 +160,6 @@ class MultiheadAttentionWithGate(nn.Module):
         use_fast_path = any(
             (
                 not torch.backends.mha.get_fastpath_enabled(),
-                not is_batched_query,
                 query is not key or key is not value,
                 self.in_proj_weight is None,
                 self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype,
@@ -185,12 +195,18 @@ class MultiheadAttentionWithGate(nn.Module):
 
         assert not (query.is_nested or key.is_nested or value.is_nested), "MultiheadAttention does not support NestedTensor."
 
-        if self.batch_first and is_batched_query:
+        if self.batch_first:
+            # query: (batch_size, seq_len, embed_dim)
+            # key: (batch_size, seq_len, embed_dim)
+            # value: (batch_size, seq_len, embed_dim)
             assert key.dim() == 3, f"key must have 3 dimensions (batch_size, seq_len, embed_dim), got {key.dim()}"
             assert value.dim() == 3, f"value must have 3 dimensions (batch_size, seq_len, embed_dim), got {value.dim()}"
-            query = query.transpose(1, 0)
-            key = key.transpose(1, 0)
-            value = value.transpose(1, 0)
+            query = query.transpose(1, 0).contiguous()
+            key = key.transpose(1, 0).contiguous()
+            value = value.transpose(1, 0).contiguous()
+            # query: (seq_len, batch_size, embed_dim)
+            # key: (seq_len, batch_size, embed_dim)
+            # value: (seq_len, batch_size, embed_dim)
 
         multi_head_attention_forward_kwargs = dict(
             query=query,
@@ -208,7 +224,7 @@ class MultiheadAttentionWithGate(nn.Module):
             out_proj_bias=self.out_proj.bias,
             training=self.training,
             key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
+            need_weights=True,
             attn_mask=attn_mask,
             average_attn_weights=average_attn_weights,
             is_causal=is_causal,
@@ -220,16 +236,21 @@ class MultiheadAttentionWithGate(nn.Module):
                 k_proj_weight=self.k_proj_weight,
                 v_proj_weight=self.v_proj_weight,
             )
-
         attn_output, attn_output_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
-
-        if self.batch_first and is_batched_query:
-            attn_output = attn_output.transpose(1, 0)
+        # attn_output: (seq_len, batch_size, embed_dim)
+        # attn_output_weights: (batch_size, seq_len, seq_len)
 
         if attn_gate is not None:
-            print(attn_output.shape, attn_gate.shape)
-            attn_output = torch.mul(attn_output, attn_gate)
-            attn_output /= attn_output.sum(dim=-1, keepdim=True) + 1e-12
+            # attn_gate: (batch_size, seq_len, seq_len)
+            assert attn_gate.size() == attn_output_weights.size(), f"attn_gate and attn_output_weights must have the same size, got {attn_gate.size()=} and {attn_output_weights.size()=}"
+            attn_output_weights *= attn_gate
+            attn_output_weights /= attn_output_weights.sum(dim=-1, keepdim=True) + 1e-12
+
+        if self.batch_first:
+            attn_output = attn_output.transpose(1, 0)
+
+        attn_output = self.dropout(attn_output)
+
         return attn_output, attn_output_weights
 
     def merge_masks(
@@ -307,6 +328,11 @@ class SyntacticDistanceGate(nn.Module):
         # x: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
         # gate: (batch_size, seq_len, seq_len)
         # distance: (batch_size, seq_len, 1)
+        if x.dim() == 2:
+            if self.batch_first:
+                x = x.unsqueeze(0)
+            else:
+                x = x.unsqueeze(1)
 
         if self.batch_first:
             x = x.transpose(1, 2)
@@ -323,25 +349,14 @@ class SyntacticDistanceGate(nn.Module):
         # conv_output: (batch_size, distance_dim, seq_len + lookback_range)
         distance = distance[:, :, 1 : -self.lookback_range]
         distance = self.distance_activation_fn(distance)
-        distance = distance.squeeze(1).unsqueeze(2).contiguous()
+        distance = distance.transpose(2, 1).contiguous()
         # distance := distance  (batch_size, seq_len, 1)
 
-        logits = F.hardtanh((distance - distance.transpose(2, 1)) * self.tau)
-        left = logits.tril(diagonal=-1) + torch.ones_like(logits).triu(diagonal=0)
-        left = left.flip([-1]).cumprod(dim=-1).flip([-1])  # reverse
-        right = logits.triu(diagonal=1) + torch.ones_like(logits).tril(diagonal=0)
-        right = right.cumprod(dim=-1)
-
-        gate = torch.mul(left, right).contiguous()
-
-        # t: 現在注目している単語の位置
-        # prob_alpha: probability value that represents the syntactic relation ship of distance d_{j} and d_{t}
-        # prob_alpha := prob_alpha (batch_size, seq_len, seq_len), 0 <= prob_alpha <= 1
-        # prob_alpha[t][j]: a_{j}^{t} = (hardtanh((d_{t} - d_{j}) * tau) + 1) / 2
-
-        # gate: attention gate values. where t is the current time step. a_{j}^{t} is syntactic relationship between d_{j} and d_{t}
-        # gate: (batch_size, seq_len, seq_len), 0 <= gate <= 1
-        # gate_{i}^{t} = prod_{j=i+1}^{t-1} a_{j}^{t}
+        alpha = (F.hardtanh((distance - distance.transpose(2, 1)) * self.tau) + 1) / 2
+        lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
+        upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
+        gate = lower_tri * upper_tri
+        # gate := gate  (batch_size, seq_len, seq_len)
         return gate, distance
 
 
@@ -411,10 +426,16 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         query: torch.Tensor,
         key: Optional[torch.Tensor] = None,
         value: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        attention_gate: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
+        attn_gate: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        attention_mask = attention_mask.to(query.dtype) if attention_mask is not None else None
+        # query: (batch_size, seq_len, embed_dim)
+        # key: (batch_size, seq_len, embed_dim)
+        # value: (batch_size, seq_len, embed_dim)
+        # attn_mask: (batch_size, seq_len, seq_len)
+        # attn_gate: (batch_size, seq_len, seq_len)
+
+        attn_mask = attn_mask.to(query.dtype) if attn_mask is not None else None
 
         _normed_query = self.layer_norm_1(query)
         key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
@@ -426,19 +447,21 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
             key,
             value,
             need_weights=False,
-            attn_mask=attention_mask,
-            attn_gate=attention_gate,
+            attn_mask=attn_mask,
+            attn_gate=attn_gate,
         )
 
         x = query + self.layer_scale_1(attention_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
+        # x: (batch_size, seq_len, embed_dim)
+        # distance: (batch_size, seq_len, 1)
         return x, distance
 
 
-x = torch.randn(3, 9, 4)
+x = torch.randn(2, 9, 4)
 block = ResidualAttentionWithSyntacticDistanceBlock(embed_dim=4, num_heads=2, batch_first=True)
 
-y, d = block(x)
+y, d = block(x, attn_gate=torch.ones(2, 9, 9))
 print(y.size(), d.size())
 # batch_size = 6
 # seq_len = 9
