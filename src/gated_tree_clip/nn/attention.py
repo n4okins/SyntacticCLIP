@@ -24,7 +24,7 @@ class MultiheadAttention(nn.Module):
         embed_dim: int,
         num_heads: int,
         *,
-        dropout: float = 0.0,
+        dropout_p: float = 0.0,
         bias: bool = True,
         add_bias_kv: bool = False,
         add_zero_attn: bool = False,
@@ -36,7 +36,9 @@ class MultiheadAttention(nn.Module):
     ):
         assert embed_dim > 0, f"embed_dim must be greater than 0, got {embed_dim}"
         assert num_heads > 0, f"num_heads must be greater than 0, got {num_heads}"
-        assert embed_dim % num_heads == 0, f"embed_dim must be divisible by num_heads, got {embed_dim} and {num_heads}"
+        assert (
+            embed_dim % num_heads == 0
+        ), f"embed_dim must be divisible by num_heads, got {embed_dim} and {num_heads}"
 
         device_and_dtypes = {"device": device, "dtype": dtype}
 
@@ -50,7 +52,7 @@ class MultiheadAttention(nn.Module):
         self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
         self.num_heads = num_heads
-        self.dropout = nn.Dropout(dropout)
+        self.dropout_p = dropout_p
 
         self.head_dim = embed_dim // num_heads
 
@@ -61,12 +63,20 @@ class MultiheadAttention(nn.Module):
         self.v_proj_weight: Optional[nn.Parameter]
 
         if not self._qkv_same_embed_dim:
-            self.q_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim), **device_and_dtypes))
-            self.k_proj_weight = nn.Parameter(torch.empty((embed_dim, self.kdim), **device_and_dtypes))
-            self.v_proj_weight = nn.Parameter(torch.empty((embed_dim, self.vdim), **device_and_dtypes))
+            self.q_proj_weight = nn.Parameter(
+                torch.empty((embed_dim, embed_dim), **device_and_dtypes)
+            )
+            self.k_proj_weight = nn.Parameter(
+                torch.empty((embed_dim, self.kdim), **device_and_dtypes)
+            )
+            self.v_proj_weight = nn.Parameter(
+                torch.empty((embed_dim, self.vdim), **device_and_dtypes)
+            )
             self.register_buffer("in_proj_weight", None)
         else:
-            self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **device_and_dtypes))
+            self.in_proj_weight = nn.Parameter(
+                torch.empty((3 * embed_dim, embed_dim), **device_and_dtypes)
+            )
             self.register_buffer("p_proj_weight", None)
             self.register_buffer("k_proj_weight", None)
             self.register_buffer("v_proj_weight", None)
@@ -74,15 +84,22 @@ class MultiheadAttention(nn.Module):
         self.in_proj_bias: Optional[nn.Parameter]
 
         if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **device_and_dtypes))
+            self.in_proj_bias = nn.Parameter(
+                torch.empty(3 * embed_dim, **device_and_dtypes)
+            )
         else:
             self.register_parameter("in_proj_bias", None)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias, **device_and_dtypes)
 
+        self.add_bias_kv = add_bias_kv
         if add_bias_kv:
-            self.bias_k = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
-            self.bias_v = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
+            self.bias_k = nn.Parameter(
+                torch.empty(1, 1, embed_dim), **device_and_dtypes
+            )
+            self.bias_v = nn.Parameter(
+                torch.empty(1, 1, embed_dim), **device_and_dtypes
+            )
         else:
             self.register_buffer("bias_k", None)
             self.register_buffer("bias_v", None)
@@ -102,9 +119,8 @@ class MultiheadAttention(nn.Module):
 
         if self.out_proj.bias is not None:
             nn.init.constant_(self.out_proj.bias, 0.0)
-        if self.bias_k is not None:
+        if self.add_bias_kv:
             nn.init.xavier_normal_(self.bias_k)
-        if self.bias_v is not None:
             nn.init.xavier_normal_(self.bias_v)
 
     def forward(
@@ -149,7 +165,8 @@ class MultiheadAttention(nn.Module):
                 not is_batched_query,
                 query is not key or key is not value,
                 self.in_proj_weight is None,
-                self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype,
+                self.in_proj_bias is not None
+                and query.dtype != self.in_proj_bias.dtype,
                 query.dtype != self.in_proj_weight.dtype,
                 self.training,
                 self.num_heads % 2 != 0,
@@ -157,12 +174,17 @@ class MultiheadAttention(nn.Module):
                 self.bias_k is not None or self.bias_v is not None,
                 self.add_zero_attn,
                 not self._qkv_same_embed_dim,
-                query.is_nested and (key_padding_mask is not None or attn_mask is not None),
+                query.is_nested
+                and (key_padding_mask is not None or attn_mask is not None),
                 torch.is_autocast_enabled(),
             )
         )
 
-        if not use_fast_path and self._qkv_same_embed_dim and self.in_proj_bias is not None:
+        if (
+            not use_fast_path
+            and self._qkv_same_embed_dim
+            and self.in_proj_bias is not None
+        ):
             # if self.in_proj_bias is not None and self.in_proj_weight is not None:
             return torch._native_multi_head_attention(
                 query,
@@ -180,11 +202,17 @@ class MultiheadAttention(nn.Module):
                 mask_type,
             )
 
-        assert not (query.is_nested or key.is_nested or value.is_nested), "MultiheadAttention does not support NestedTensor."
+        assert not (
+            query.is_nested or key.is_nested or value.is_nested
+        ), "MultiheadAttention does not support NestedTensor."
 
         if self.batch_first and is_batched_query:
-            assert key.dim() == 3, f"key must have 3 dimensions (batch_size, seq_len, embed_dim), got {key.dim()}"
-            assert value.dim() == 3, f"value must have 3 dimensions (batch_size, seq_len, embed_dim), got {value.dim()}"
+            assert (
+                key.dim() == 3
+            ), f"key must have 3 dimensions (batch_size, seq_len, embed_dim), got {key.dim()}"
+            assert (
+                value.dim() == 3
+            ), f"value must have 3 dimensions (batch_size, seq_len, embed_dim), got {value.dim()}"
             query = query.transpose(1, 0)
             key = key.transpose(1, 0)
             value = value.transpose(1, 0)
@@ -200,7 +228,7 @@ class MultiheadAttention(nn.Module):
             bias_k=self.bias_k,
             bias_v=self.bias_v,
             add_zero_attn=self.add_zero_attn,
-            dropout_p=self.dropout.p,
+            dropout_p=self.dropout_p,
             out_proj_weight=self.out_proj.weight,
             out_proj_bias=self.out_proj.bias,
             training=self.training,
@@ -218,15 +246,53 @@ class MultiheadAttention(nn.Module):
                 v_proj_weight=self.v_proj_weight,
             )
 
-        attn_output, attn_output_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
+        attn_output, attn_output_weights = F.multi_head_attention_forward(
+            **multi_head_attention_forward_kwargs
+        )
 
         if self.batch_first and is_batched_query:
             attn_output = attn_output.transpose(1, 0)
 
         return attn_output, attn_output_weights
 
+    def incomplete_scaled_dot_product_self_attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        *,
+        attn_mask: Optional[torch.Tensor] = None,
+        dropout_p: float = 0.0,
+        is_causal: bool = False,
+        scale: float = None,
+        return_weights: bool = False,
+    ) -> torch.Tensor:
+        # multi-head scaled dot product self attention
+        # ただし、query, keyのみ入力として、最後のattn_weight @ valueは計算せずにattn_weightのみ返す
+        L, S = query.size(-2), key.size(-2)
+        scale_factor = 1 / (query.size(-1) ** 0.5) if scale is None else scale
+        attn_bias = torch.zeros(L, S, dtype=query.dtype)
+        if is_causal:
+            assert attn_mask is None
+            temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+            attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+            attn_bias.to(query.dtype)
+
+        if attn_mask is not None:
+            if attn_mask.dtype == torch.bool:
+                attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+            else:
+                attn_bias += attn_mask
+        attn_weight = query @ key.transpose(-2, -1) * scale_factor
+        attn_weight += attn_bias
+        attn_weight = torch.softmax(attn_weight, dim=-1)
+        attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+        return attn_weight
+
     def merge_masks(
-        self, attention_mask: Optional[torch.Tensor], key_padding_mask: Optional[torch.Tensor], query: torch.Tensor
+        self,
+        attention_mask: Optional[torch.Tensor],
+        key_padding_mask: Optional[torch.Tensor],
+        query: torch.Tensor,
     ) -> tuple[Optional[torch.Tensor], Optional[int]]:
         r"""Determine mask type and combine masks if necessary.
 
@@ -255,13 +321,19 @@ class MultiheadAttention(nn.Module):
             mask_type = 2
 
             if attention_mask.dim() == 3:
-                attention_mask_expanded = attention_mask.view(batch_size, -1, seq_len, seq_len)
+                attention_mask_expanded = attention_mask.view(
+                    batch_size, -1, seq_len, seq_len
+                )
             else:  # attn_mask.dim() == 2:
-                attention_mask_expanded = attention_mask.view(1, 1, seq_len, seq_len).expand(batch_size, self.num_heads, -1, -1)
+                attention_mask_expanded = attention_mask.view(
+                    1, 1, seq_len, seq_len
+                ).expand(batch_size, self.num_heads, -1, -1)
             merged_mask = attention_mask_expanded
 
             if key_padding_mask is not None:
-                key_padding_mask_expanded = key_padding_mask.view(batch_size, 1, 1, seq_len).expand(-1, self.num_heads, -1, -1)
+                key_padding_mask_expanded = key_padding_mask.view(
+                    batch_size, 1, 1, seq_len
+                ).expand(-1, self.num_heads, -1, -1)
                 merged_mask = attention_mask_expanded + key_padding_mask_expanded
 
         return merged_mask, mask_type
@@ -300,9 +372,15 @@ class ResidualAttentionBlock(nn.Module):
         self.init_layer_scale_ratio = init_layer_scale_ratio
 
         self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
-        self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
+        self.layer_norm_1_kv = (
+            CastLayerNorm(normalized_shape=embed_dim)
+            if is_cross_attention
+            else nn.Identity()
+        )
 
-        self.attention = MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = MultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first
+        )
 
         self.layer_scale_1 = (
             LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
@@ -332,22 +410,30 @@ class ResidualAttentionBlock(nn.Module):
         query: torch.Tensor,
         key: Optional[torch.Tensor] = None,
         value: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        *,
+        attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        attention_mask = attention_mask.to(query.dtype) if attention_mask is not None else None
+        attn_mask = attn_mask.to(query.dtype) if attn_mask is not None else None
 
         _normed_query = self.layer_norm_1(query)
-        key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
-        value = self.layer_norm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
+        key = (
+            self.layer_norm_1_kv(key)
+            if self.is_cross_attention and key is not None
+            else _normed_query
+        )
+        value = (
+            self.layer_norm_1_kv(value)
+            if self.is_cross_attention and value is not None
+            else _normed_query
+        )
 
-        attention_out, _ = self.attention(
+        attn_out, attn_weight = self.attention(
             _normed_query,
             key,
             value,
-            need_weights=False,
-            attn_mask=attention_mask,
+            need_weights=True,
+            attn_mask=attn_mask,
         )
-
-        x = query + self.layer_scale_1(attention_out)
+        x = query + self.layer_scale_1(attn_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
-        return x
+        return x, attn_weight

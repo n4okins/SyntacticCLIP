@@ -6,6 +6,7 @@ import gated_tree_clip.nn as gtcnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from gated_tree_clip.nn import CastLayerNorm, LayerScale, MultiheadAttention
 from utils.clogging import getColoredLogger
 from utils.initialize import initializer
 
@@ -13,104 +14,82 @@ logger = getColoredLogger(__name__)
 logger.setLevel("INFO")
 initializer(globals(), logger=logger)
 
-# %%
 
-
-class MultiheadAttentionWithGate(nn.Module):
-    __constants__ = ["batch_first"]
-    bias_k: Optional[torch.Tensor]
-    bias_v: Optional[torch.Tensor]
-
+class SyntacticDistanceGate(nn.Module):
     def __init__(
         self,
-        embed_dim: int,
-        num_heads: int,
+        in_channels: int,
+        lookback_range: int,
+        num_gate_heads: int = 2,
         *,
+        tau: float = 1.0,
         dropout: float = 0.0,
-        bias: bool = True,
-        add_bias_kv: bool = False,
-        add_zero_attn: bool = False,
-        kdim: int = None,
-        vdim: int = None,
-        batch_first: bool = False,
-        device: torch.device | str = None,
-        dtype: torch.dtype = None,
+        batch_first: bool = True,
+        distance_activation_fn: Optional[Callable] = None,
     ):
-        assert embed_dim > 0, f"embed_dim must be greater than 0, got {embed_dim}"
-        assert num_heads > 0, f"num_heads must be greater than 0, got {num_heads}"
-        assert embed_dim % num_heads == 0, f"embed_dim must be divisible by num_heads, got {embed_dim} and {num_heads}"
-
-        device_and_dtypes = {"device": device, "dtype": dtype}
-
         super().__init__()
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
+        self.lookback_range = lookback_range
         self.batch_first = batch_first
+        self.tau = tau
+        self.num_gate_heads = num_gate_heads
+        self.conv = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, in_channels, 1),
+            nn.BatchNorm1d(in_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, in_channels, 1),
+            nn.BatchNorm1d(in_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(in_channels, num_gate_heads, lookback_range, padding=lookback_range),
+        )
+        self.distance_activation_fn = distance_activation_fn or nn.Tanh()
 
-        self.kdim = kdim if kdim is not None else embed_dim
-        self.vdim = vdim if vdim is not None else embed_dim
-        self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
+    def forward(self, x: torch.Tensor):
+        # x: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
+        # gate: (batch_size, seq_len, seq_len)
+        # distance: (batch_size, seq_len, 1)
+        if x.dim() == 2:
+            if self.batch_first:
+                x = x.unsqueeze(0)
+            else:
+                x = x.unsqueeze(1)
 
-        self.num_heads = num_heads
-        self.dropout = nn.Dropout(dropout)
-
-        self.head_dim = embed_dim // num_heads
-
-        self.in_proj_weight: Optional[nn.Parameter]
-
-        self.q_proj_weight: Optional[nn.Parameter]
-        self.k_proj_weight: Optional[nn.Parameter]
-        self.v_proj_weight: Optional[nn.Parameter]
-
-        if not self._qkv_same_embed_dim:
-            self.q_proj_weight = nn.Parameter(torch.empty((embed_dim, embed_dim), **device_and_dtypes))
-            self.k_proj_weight = nn.Parameter(torch.empty((embed_dim, self.kdim), **device_and_dtypes))
-            self.v_proj_weight = nn.Parameter(torch.empty((embed_dim, self.vdim), **device_and_dtypes))
-            self.register_buffer("in_proj_weight", None)
+        if self.batch_first:
+            x = x.transpose(1, 2)
         else:
-            self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **device_and_dtypes))
-            self.register_buffer("p_proj_weight", None)
-            self.register_buffer("k_proj_weight", None)
-            self.register_buffer("v_proj_weight", None)
+            x = x.permute(1, 2, 0)
 
-        self.in_proj_bias: Optional[nn.Parameter]
+        batch_size, embed_dim, seq_len = x.size()
 
-        if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **device_and_dtypes))
-        else:
-            self.register_parameter("in_proj_bias", None)
+        # distance: Syntactic Distance [d_i, ...]: i番目の単語の構文距離 (構文高？)
+        # distance := distance  (batch_size, seq_len, 1)
+        # distance[i] = \tanh(W_D [k_{i-M}, k_{i-M+1}, ..., K_{i}]^{\top} + b_D)
+        # conv_input: (batch_size, embed_dim, seq_len)
+        distance = self.conv(x)
+        # disttance : (batch_size, distance_dim, seq_len + lookback_range)
+        distance = distance[:, :, 1 : -self.lookback_range]
+        distance = self.distance_activation_fn(distance)
+        distance = distance.view(batch_size * self.num_gate_heads, seq_len, 1)
+        # distance: (batch_size * num_gates_heads, seq_len, 1)
+        alpha = (F.hardtanh((distance - distance.transpose(2, 1)) * self.tau) + 1) / 2
+        lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
+        upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
+        gate = lower_tri * upper_tri
+        distance = distance.view(batch_size, self.num_gate_heads, seq_len).transpose(1, 2)
 
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias, **device_and_dtypes)
-
-        self.add_bias_kv = add_bias_kv
-        if add_bias_kv:
-            self.bias_k = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
-            self.bias_v = nn.Parameter(torch.empty(1, 1, embed_dim), **device_and_dtypes)
-        else:
-            self.register_buffer("bias_k", None)
-            self.register_buffer("bias_v", None)
-
-        self.add_zero_attn = add_zero_attn
-        self.scaling = self.head_dim ** -0.5
-        self._reset_parameters()
+        gate = gate.contiguous()
+        distance = distance.contiguous()
+        # gate := gate  (batch_size, seq_len, seq_len), 0 <= gate <= 1
+        # distance := distance  (batch_size, seq_len, num_gate_heads), -1 <= distance <= 1
+        return gate, distance
 
 
-    def _reset_parameters(self):
-        if self._qkv_same_embed_dim:
-            nn.init.xavier_uniform_(self.in_proj_weight, gain=1 / math.sqrt(2))
-        else:
-            nn.init.xavier_uniform_(self.k_proj_weight)
-            nn.init.xavier_uniform_(self.v_proj_weight)
-            nn.init.xavier_uniform_(self.q_proj_weight)
-
-        nn.init.xavier_uniform_(self.out_proj.weight)
-
-        if self.out_proj.bias is not None:
-            nn.init.constant_(self.out_proj.bias, 0.0)
-        if self.bias_k is not None:
-            nn.init.xavier_normal_(self.bias_k)
-        if self.bias_v is not None:
-            nn.init.xavier_normal_(self.bias_v)
+class MultiheadAttentionWithGate(MultiheadAttention):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.out_proj = nn.Linear(self.embed_dim * self.num_heads, self.embed_dim, bias=True)
 
     def forward(
         self,
@@ -124,6 +103,7 @@ class MultiheadAttentionWithGate(nn.Module):
         attn_gate: Optional[torch.Tensor] = None,
         average_attn_weights: bool = True,
         is_causal: bool = False,
+        attn_weight_div_delta: float = 1e-12,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         input shape: (seq_len, batch_size, embed_dim) or (batch_size, seq_len, embed_dim)
@@ -138,7 +118,7 @@ class MultiheadAttentionWithGate(nn.Module):
                     v.unsqueeze_(0)
                 else:
                     v.unsqueeze_(1)
-        
+
         batch_size, seq_len, _ = query.size()
 
         key_padding_mask = F._canonical_mask(
@@ -208,156 +188,113 @@ class MultiheadAttentionWithGate(nn.Module):
             # key: (seq_len, batch_size, embed_dim)
             # value: (seq_len, batch_size, embed_dim)
 
-        multi_head_attention_forward_kwargs = dict(
-            query=query,
-            key=key,
-            value=value,
-            embed_dim_to_check=self.embed_dim,
-            num_heads=self.num_heads,
-            in_proj_weight=self.in_proj_weight,
-            in_proj_bias=self.in_proj_bias,
-            bias_k=self.bias_k,
-            bias_v=self.bias_v,
-            add_zero_attn=self.add_zero_attn,
-            dropout_p=self.dropout.p,
-            out_proj_weight=self.out_proj.weight,
-            out_proj_bias=self.out_proj.bias,
-            training=self.training,
-            key_padding_mask=key_padding_mask,
-            need_weights=True,
-            attn_mask=attn_mask,
-            average_attn_weights=average_attn_weights,
-            is_causal=is_causal,
-        )
-        if not self._qkv_same_embed_dim:
-            multi_head_attention_forward_kwargs.update(
-                use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj_weight,
-                k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight,
+        if attn_gate is None:
+            # if attn_gate is None, then use the original multi-head attention
+            multi_head_attention_forward_kwargs = dict(
+                query=query,
+                key=key,
+                value=value,
+                embed_dim_to_check=self.embed_dim,
+                num_heads=self.num_heads,
+                in_proj_weight=self.in_proj_weight,
+                in_proj_bias=self.in_proj_bias,
+                bias_k=self.bias_k,
+                bias_v=self.bias_v,
+                add_zero_attn=self.add_zero_attn,
+                dropout_p=self.dropout_p,
+                out_proj_weight=self.out_proj.weight,
+                out_proj_bias=self.out_proj.bias,
+                training=self.training,
+                key_padding_mask=key_padding_mask,
+                need_weights=True,
+                attn_mask=attn_mask,
+                average_attn_weights=average_attn_weights,
+                is_causal=is_causal,
             )
-        attn_output, attn_output_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
-        # attn_output: (seq_len, batch_size, embed_dim)
-        # attn_output_weights: (batch_size, seq_len, seq_len)
+            if not self._qkv_same_embed_dim:
+                multi_head_attention_forward_kwargs.update(
+                    use_separate_proj_weight=True,
+                    q_proj_weight=self.q_proj_weight,
+                    k_proj_weight=self.k_proj_weight,
+                    v_proj_weight=self.v_proj_weight,
+                )
+            attn_output, attn_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
+            # attn_output: (seq_len, batch_size, embed_dim)
+            # attn_weights: (batch_size, seq_len, seq_len)
 
-        if attn_gate is not None:
+        else:
             # attn_gate: (batch_size, seq_len, seq_len)
-            assert attn_gate.size() == attn_output_weights.size(), f"attn_gate and attn_output_weights must have the same size, got {attn_gate.size()=} and {attn_output_weights.size()=}"
-            attn_output_weights *= attn_gate
-            attn_output_weights /= attn_output_weights.sum(dim=-1, keepdim=True) + 1e-12
+            # query: (seq_len, batch_size, embed_dim)
+            # key: (seq_len, batch_size, embed_dim)
+            # value: (seq_len, batch_size, embed_dim)
 
-        if self.batch_first:
-            attn_output = attn_output.transpose(1, 0)
+            # to batch_first
+            query = query.transpose(1, 0)
+            key = key.transpose(1, 0)
+            value = value.transpose(1, 0)
 
-        attn_output = self.dropout(attn_output)
+            if self._qkv_same_embed_dim:
+                W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
+                if self.in_proj_bias is not None:
+                    b_q, b_k, b_v = self.in_proj_bias.chunk(3, dim=0)
+                else:
+                    b_q = b_k = b_v = None
+            else:
+                W_q, W_k, W_v = self.q_proj_weight, self.k_proj_weight, self.v_proj_weight
 
-        return attn_output, attn_output_weights
+            query = F.linear(query, W_q, b_q)
+            key = F.linear(key, W_k, b_k)
+            value = F.linear(value, W_v, b_v)
+            if self.add_bias_kv:
+                key += self.bias_k
+                value += self.bias_v
 
-    def merge_masks(
-        self, attention_mask: Optional[torch.Tensor], key_padding_mask: Optional[torch.Tensor], query: torch.Tensor
-    ) -> tuple[Optional[torch.Tensor], Optional[int]]:
-        r"""Determine mask type and combine masks if necessary.
+            query = query.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
+            key = key.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
+            value = value.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
 
-        If only one mask is provided, that mask
-        and the corresponding mask type will be returned. If both masks are provided, they will be both
-        expanded to shape ``(batch_size, num_heads, seq_len, seq_len)``, combined with logical ``or``
-        and mask type 2 will be returned
-        Args:
-            attn_mask: attention mask of shape ``(seq_len, seq_len)``, mask type 0
-            key_padding_mask: padding mask of shape ``(batch_size, seq_len)``, mask type 1
-            query: query embeddings of shape ``(batch_size, seq_len, embed_dim)``
-        Returns:
-            merged_mask: merged mask
-            mask_type: merged mask type (0, 1, or 2)
-        """
-        merged_mask: Optional[torch.Tensor] = None
-        # mask_type = 1: key_padding_mask, 2: attn_mask, 3: key_padding_mask + attn_mask
-        mask_type: Optional[int] = None
+            attn_head_weights = torch.bmm(query, key.transpose(1, 2)) / (self.embed_dim**0.5)
+            attn_head_biases = torch.zeros((seq_len, seq_len), dtype=query.dtype, device=query.device)
 
-        if key_padding_mask is not None:
-            mask_type = 1
-            merged_mask = key_padding_mask
+            if is_causal:
+                assert attn_mask is None, "attn_mask is not None when is_causal is True"
+                causal_mask = torch.ones((seq_len, seq_len), dtype=torch.bool, device=query.device).triu(diagonal=0)
+                attn_head_biases.masked_fill_(causal_mask.logical_not(), float("-inf"))
 
-        if attention_mask is not None:
-            batch_size, seq_len, _ = query.shape
-            mask_type = 2
-
-            if attention_mask.dim() == 3:
-                attention_mask_expanded = attention_mask.view(batch_size, -1, seq_len, seq_len)
-            else:  # attn_mask.dim() == 2:
-                attention_mask_expanded = attention_mask.view(1, 1, seq_len, seq_len).expand(batch_size, self.num_heads, -1, -1)
-            merged_mask = attention_mask_expanded
+            if attn_mask is not None:
+                if attn_mask.dtype == torch.bool:
+                    attn_head_biases.masked_fill_(attn_mask.logical_not(), float("-inf"))
+                else:
+                    attn_head_biases += attn_mask
 
             if key_padding_mask is not None:
-                key_padding_mask_expanded = key_padding_mask.view(batch_size, 1, 1, seq_len).expand(-1, self.num_heads, -1, -1)
-                merged_mask = attention_mask_expanded + key_padding_mask_expanded
+                attn_head_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
+                attn_head_weights = attn_head_weights.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+                attn_head_weights = attn_head_weights.view(batch_size * self.num_heads, seq_len, seq_len)
+                if average_attn_weights:
+                    attn_head_weights = F.softmax(attn_head_weights, dim=-1)
 
-        return merged_mask, mask_type
+            # attn_head_weights: (batch_size * num_heads, seq_len, seq_len)
+            # attn_gate: (batch_size * num_heads, seq_len, seq_len)
+            if attn_gate is not None:
+                attn_head_weights = attn_head_weights * attn_gate
+                attn_head_weights /= attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
 
+            attn_output = torch.bmm(attn_head_weights, value)
+            attn_output = attn_output.chunk(self.num_heads, dim=0)
+            attn_output = torch.cat(attn_output, dim=2)
+            # attn_output: (batch_size, seq_len, embed_dim * num_heads)
+            assert list(attn_output.size()) == [batch_size, seq_len, self.embed_dim * self.num_heads]
+            attn_output = self.out_proj(attn_output)
+            attn_weights = None
+            if need_weights:
+                attn_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
+                if average_attn_weights:
+                    attn_weights = attn_weights.mean(dim=1)
 
-class SyntacticDistanceGate(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        kernel_size: int,
-        *,
-        tau: float = 1.0,
-        dropout: float = 0.0,
-        batch_first: bool = True,
-        distance_activation_fn: Optional[Callable] = None,
-    ):
-        super().__init__()
-        self.lookback_range = kernel_size
-        self.batch_first = batch_first
-        self.tau = tau
-        self.conv = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, in_channels, 1),
-            nn.BatchNorm1d(in_channels),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, in_channels, 1),
-            nn.BatchNorm1d(in_channels),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, 1, kernel_size, padding=kernel_size),
-        )
-        self.distance_activation_fn = distance_activation_fn or nn.Tanh()
-
-    def forward(self, x: torch.Tensor):
-        # x: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
-        # gate: (batch_size, seq_len, seq_len)
-        # distance: (batch_size, seq_len, 1)
-        if x.dim() == 2:
-            if self.batch_first:
-                x = x.unsqueeze(0)
-            else:
-                x = x.unsqueeze(1)
-
-        if self.batch_first:
-            x = x.transpose(1, 2)
-        else:
-            x = x.permute(1, 2, 0)
-
-        batch_size, embed_dim, seq_len = x.size()
-
-        # distance: Syntactic Distance [d_i, ...]: i番目の単語の構文距離 (構文高？)
-        # distance := distance  (batch_size, seq_len, 1)
-        # distance[i] = \tanh(W_D [k_{i-M}, k_{i-M+1}, ..., K_{i}]^{\top} + b_D)
-        # conv_input: (batch_size, embed_dim, seq_len)
-        distance = self.conv(x)
-        # conv_output: (batch_size, distance_dim, seq_len + lookback_range)
-        distance = distance[:, :, 1 : -self.lookback_range]
-        distance = self.distance_activation_fn(distance)
-        distance = distance.transpose(2, 1).contiguous()
-
-        alpha = (F.hardtanh((distance - distance.transpose(2, 1)) * self.tau) + 1) / 2
-        lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
-        upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
-        gate = lower_tri * upper_tri
-        # gate := gate  (batch_size, seq_len, seq_len), 0 <= gate <= 1
-        # distance := distance  (batch_size, seq_len, 1), -1 <= distance <= 1
-        return gate, distance
+        if not self.batch_first:
+            attn_output = attn_output.transpose(1, 0)
+        return attn_output, attn_weights
 
 
 class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
@@ -392,18 +329,20 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         self.is_cross_attention = is_cross_attention
         self.init_layer_scale_ratio = init_layer_scale_ratio
 
-        self.layer_norm_1 = gtcnn.CastLayerNorm(normalized_shape=embed_dim)
-        self.layer_norm_1_kv = gtcnn.CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
+        self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
+        self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
 
         self.attention = MultiheadAttentionWithGate(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
-        self.gate = SyntacticDistanceGate(in_channels=embed_dim, kernel_size=3, batch_first=batch_first)
+        self.gate = SyntacticDistanceGate(
+            in_channels=embed_dim, lookback_range=3, num_gate_heads=num_heads, batch_first=batch_first
+        )
 
         self.layer_scale_1 = (
-            gtcnn.LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
+            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
             if init_layer_scale_ratio
             else nn.Identity()
         )
-        self.layer_norm_2 = gtcnn.CastLayerNorm(normalized_shape=embed_dim)
+        self.layer_norm_2 = CastLayerNorm(normalized_shape=embed_dim)
 
         self.res_mlp = (
             res_mlp
@@ -416,7 +355,7 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         )
 
         self.layer_scale_2 = (
-            gtcnn.LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
+            LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
             if init_layer_scale_ratio
             else nn.Identity()
         )
@@ -426,6 +365,7 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         query: torch.Tensor,
         key: Optional[torch.Tensor] = None,
         value: Optional[torch.Tensor] = None,
+        *,
         attn_mask: Optional[torch.Tensor] = None,
         attn_gate: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -441,28 +381,26 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
         value = self.layer_norm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
 
-        attention_gate, distance = self.gate(key)
-        attention_out, _ = self.attention(
+        attn_gate, distance = self.gate(key)
+        attn_out, attn_weight = self.attention(
             _normed_query,
             key,
             value,
-            need_weights=False,
+            need_weights=True,
             attn_mask=attn_mask,
             attn_gate=attn_gate,
         )
-
-        x = query + self.layer_scale_1(attention_out)
+        x = query + self.layer_scale_1(attn_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
-        # x: (batch_size, seq_len, embed_dim)
-        # distance: (batch_size, seq_len, 1)
-        return x, distance
+        return x, attn_weight, distance
 
 
-x = torch.randn(2, 9, 4)
-block = ResidualAttentionWithSyntacticDistanceBlock(embed_dim=4, num_heads=2, batch_first=True)
+x = torch.randn(2, 5, 8)
+block = ResidualAttentionWithSyntacticDistanceBlock(embed_dim=8, num_heads=4, batch_first=True)
+y, w, d = block(x, attn_gate=torch.rand(2, 9, 9))
 
-y, d = block(x, attn_gate=torch.rand(2, 9, 9))
-print(y.size(), d.size())
+print(y.size(), w.size(), d.size())
+print(y, w, d)
 # batch_size = 6
 # seq_len = 9
 # embed_dim = 4

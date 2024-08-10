@@ -4,6 +4,7 @@ from .gated_attention import MultiheadAttentionWithGate, ResidualAttentionWithSy
 from .layernorm import CastLayerNorm
 from .layerscale import LayerScale
 from .patch_dropout import PatchDropout
+from .syntactic_distance_gate import SyntacticDistanceGate
 from .transformer import TextTransformer, Transformer, VisionTransformer
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "ResidualAttentionBlock",
     "MultiheadAttentionWithGate",
     "ResidualAttentionWithSyntacticDistanceBlock",
+    "SyntacticDistanceGate",
     "CLIPBase",
     "CLIPEncoder",
     "CastLayerNorm",
