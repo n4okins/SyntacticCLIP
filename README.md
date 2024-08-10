@@ -1,8 +1,12 @@
 # gated-tree-clip
 
+おそらく実装済み
+SyntacticDistanceGate
+MultiheadAttentionWithGate
+ResidualAttentionWithSyntacticDistanceBlock
+
 
 未実装/未確認
-GatedMultiheadAttention
 GatedTreeTransformer
 GatedTreeVisionTransformer
 GatedTreeTextTransformer
