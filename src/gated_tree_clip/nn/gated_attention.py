@@ -16,10 +16,6 @@ __all__ = ["ResidualAttentionWithSyntacticDistanceBlock", "MultiheadAttentionWit
 
 
 class MultiheadAttentionWithGate(MultiheadAttention):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.out_proj = nn.Linear(self.embed_dim * self.num_heads, self.embed_dim, bias=True)
-
     def forward(
         self,
         query: torch.Tensor,
@@ -43,12 +39,11 @@ class MultiheadAttentionWithGate(MultiheadAttention):
 
         for v in (query, key, value):
             if v.dim() == 2:
+                # add batch dimension
                 if self.batch_first:
                     v.unsqueeze_(0)
                 else:
                     v.unsqueeze_(1)
-
-        batch_size, seq_len, _ = query.size()
 
         key_padding_mask = F._canonical_mask(
             mask=key_padding_mask,
@@ -157,11 +152,6 @@ class MultiheadAttentionWithGate(MultiheadAttention):
             # key: (seq_len, batch_size, embed_dim)
             # value: (seq_len, batch_size, embed_dim)
 
-            # to batch_first
-            query = query.transpose(1, 0)
-            key = key.transpose(1, 0)
-            value = value.transpose(1, 0)
-
             if self._qkv_same_embed_dim:
                 W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
                 if self.in_proj_bias is not None:
@@ -177,6 +167,8 @@ class MultiheadAttentionWithGate(MultiheadAttention):
             if self.add_bias_kv:
                 key += self.bias_k
                 value += self.bias_v
+
+            batch_size, seq_len, _ = query.size()
 
             query = query.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
             key = key.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
@@ -205,6 +197,14 @@ class MultiheadAttentionWithGate(MultiheadAttention):
 
             # attn_head_weights: (batch_size * num_heads, seq_len, seq_len)
             # attn_gate: (batch_size * num_heads, seq_len, seq_len)
+
+            assert tuple(attn_head_weights.size()) == (batch_size * self.num_heads, seq_len, seq_len)
+            assert tuple(attn_gate.size()) == (
+                batch_size * self.num_heads,
+                seq_len,
+                seq_len,
+            ), f"{attn_gate.size()=}, expected {(batch_size * self.num_heads, seq_len, seq_len)}"
+
             if attn_gate is not None:
                 attn_head_weights = attn_head_weights * attn_gate
                 attn_head_weights /= attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
@@ -213,18 +213,22 @@ class MultiheadAttentionWithGate(MultiheadAttention):
             attn_output = attn_output.chunk(self.num_heads, dim=0)
             attn_output = torch.cat(attn_output, dim=2)
             # attn_output: (batch_size, seq_len, embed_dim * num_heads)
-            assert list(attn_output.size()) == [batch_size, seq_len, self.embed_dim * self.num_heads]
             attn_output = self.out_proj(attn_output)
             attn_weights = None
             if need_weights:
                 attn_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
                 if average_attn_weights:
-                    attn_weights = attn_weights.mean(dim=1)
+                    attn_weights = attn_weights.mean(dim=1).contiguous()
 
-        if not self.batch_first:
+            # attn_output: (batch_size, seq_len, embed_dim)
             attn_output = attn_output.transpose(1, 0)
-        return attn_output, attn_weights
+            # attn_output: (seq_len, batch_size, embed_dim)
 
+        if self.batch_first:
+            attn_output = attn_output.transpose(1, 0)
+
+        attn_output = attn_output.contiguous()
+        return attn_output, attn_weights
 
 
 class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
@@ -245,6 +249,9 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         num_heads: int = 8,
         batch_first: bool = True,
         *,
+        num_lookback_range: int = 3,
+        tau: float = 1.0,
+        gate_dropout_p: float = 0.0,
         res_mlp: Optional[nn.Module] = None,
         res_mlp_dim: Optional[int] = None,
         is_cross_attention: bool = False,
@@ -264,7 +271,12 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
 
         self.attention = MultiheadAttentionWithGate(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
         self.gate = SyntacticDistanceGate(
-            in_channels=embed_dim, lookback_range=3, num_gate_heads=num_heads, batch_first=batch_first
+            in_embed_dim=embed_dim,
+            num_lookback_range=num_lookback_range,
+            num_gate_heads=num_heads,
+            batch_first=batch_first,
+            tau=tau,
+            dropout_p=gate_dropout_p,
         )
 
         self.layer_scale_1 = (
@@ -323,4 +335,3 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         x = query + self.layer_scale_1(attn_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
         return x, attn_weight, distance
-

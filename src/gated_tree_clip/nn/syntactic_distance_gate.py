@@ -11,31 +11,31 @@ logger = getColoredLogger(__name__)
 class SyntacticDistanceGate(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        lookback_range: int,
+        in_embed_dim: int,
+        num_lookback_range: int,
         num_gate_heads: int = 2,
         *,
         tau: float = 1.0,
-        dropout: float = 0.0,
+        dropout_p: float = 0.0,
         batch_first: bool = True,
         distance_activation_fn: Optional[Callable] = None,
     ):
         super().__init__()
-        self.lookback_range = lookback_range
+        self.lookback_range = num_lookback_range
         self.batch_first = batch_first
         self.tau = tau
         self.num_gate_heads = num_gate_heads
         self.conv = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, in_channels, 1),
-            nn.BatchNorm1d(in_channels),
+            nn.Dropout(dropout_p),
+            nn.Conv1d(in_embed_dim, in_embed_dim, 1),
+            nn.BatchNorm1d(in_embed_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, in_channels, 1),
-            nn.BatchNorm1d(in_channels),
+            nn.Dropout(dropout_p),
+            nn.Conv1d(in_embed_dim, in_embed_dim, 1),
+            nn.BatchNorm1d(in_embed_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(in_channels, num_gate_heads, lookback_range, padding=lookback_range),
+            nn.Dropout(dropout_p),
+            nn.Conv1d(in_embed_dim, num_gate_heads, num_lookback_range, padding=num_lookback_range),
         )
         self.distance_activation_fn = distance_activation_fn or nn.Tanh()
 
