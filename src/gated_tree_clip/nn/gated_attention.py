@@ -33,17 +33,20 @@ class MultiheadAttentionWithGate(MultiheadAttention):
         """
         input shape: (seq_len, batch_size, embed_dim) or (batch_size, seq_len, embed_dim)
         """
+        if attn_gate is None:
+            return super().forward(
+                query,
+                key,
+                value,
+                key_padding_mask=key_padding_mask,
+                need_weights=need_weights,
+                attn_mask=attn_mask,
+                average_attn_weights=average_attn_weights,
+                is_causal=is_causal,
+            )
 
         key = key if key is not None else query
         value = value if value is not None else query
-
-        for v in (query, key, value):
-            if v.dim() == 2:
-                # add batch dimension
-                if self.batch_first:
-                    v.unsqueeze_(0)
-                else:
-                    v.unsqueeze_(1)
 
         key_padding_mask = F._canonical_mask(
             mask=key_padding_mask,
@@ -61,173 +64,148 @@ class MultiheadAttentionWithGate(MultiheadAttention):
             check_other=False,
         )
         merged_mask, mask_type = self.merge_masks(attn_mask, key_padding_mask, query)
-        use_fast_path = any(
-            (
-                not torch.backends.mha.get_fastpath_enabled(),
-                query is not key or key is not value,
-                self.in_proj_weight is None,
-                self.in_proj_bias is not None and query.dtype != self.in_proj_bias.dtype,
-                query.dtype != self.in_proj_weight.dtype,
-                self.training,
-                self.num_heads % 2 != 0,
-                not self.batch_first,
-                self.bias_k is not None or self.bias_v is not None,
-                self.add_zero_attn,
-                not self._qkv_same_embed_dim,
-                query.is_nested and (key_padding_mask is not None or attn_mask is not None),
-                torch.is_autocast_enabled(),
-            )
-        )
 
-        if not use_fast_path and self._qkv_same_embed_dim and self.in_proj_bias is not None:
-            # if self.in_proj_bias is not None and self.in_proj_weight is not None:
-            return torch._native_multi_head_attention(
-                query,
-                key,
-                value,
-                self.embed_dim,
-                self.num_heads,
-                self.in_proj_weight,
-                self.in_proj_bias,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                merged_mask,
-                need_weights,
-                average_attn_weights,
-                mask_type,
-            )
+        assert not (
+            query.is_nested or key.is_nested or value.is_nested
+        ), f"{self.__class__.__name__} does not support NestedTensor."
 
-        assert not (query.is_nested or key.is_nested or value.is_nested), "MultiheadAttention does not support NestedTensor."
-
-        if self.batch_first:
-            # query: (batch_size, seq_len, embed_dim)
-            # key: (batch_size, seq_len, embed_dim)
-            # value: (batch_size, seq_len, embed_dim)
-            assert key.dim() == 3, f"key must have 3 dimensions (batch_size, seq_len, embed_dim), got {key.dim()}"
-            assert value.dim() == 3, f"value must have 3 dimensions (batch_size, seq_len, embed_dim), got {value.dim()}"
-            query = query.transpose(1, 0).contiguous()
-            key = key.transpose(1, 0).contiguous()
-            value = value.transpose(1, 0).contiguous()
+        if not self.batch_first:
             # query: (seq_len, batch_size, embed_dim)
             # key: (seq_len, batch_size, embed_dim)
             # value: (seq_len, batch_size, embed_dim)
+            assert key.dim() == 3, f"key must have 3 dimensions (seq_len, batch_size, embed_dim), got {key.dim()=}"
+            assert value.dim() == 3, f"value must have 3 dimensions (seq_len, batch_size, embed_dim), got {value.dim()=}"
+            query = query.transpose(1, 0)
+            key = key.transpose(1, 0)
+            value = value.transpose(1, 0)
 
-        if attn_gate is None:
-            # if attn_gate is None, then use the original multi-head attention
-            multi_head_attention_forward_kwargs = dict(
-                query=query,
-                key=key,
-                value=value,
-                embed_dim_to_check=self.embed_dim,
-                num_heads=self.num_heads,
-                in_proj_weight=self.in_proj_weight,
-                in_proj_bias=self.in_proj_bias,
-                bias_k=self.bias_k,
-                bias_v=self.bias_v,
-                add_zero_attn=self.add_zero_attn,
-                dropout_p=self.dropout_p,
-                out_proj_weight=self.out_proj.weight,
-                out_proj_bias=self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=key_padding_mask,
-                need_weights=True,
-                attn_mask=attn_mask,
-                average_attn_weights=average_attn_weights,
-                is_causal=is_causal,
-            )
-            if not self._qkv_same_embed_dim:
-                multi_head_attention_forward_kwargs.update(
-                    use_separate_proj_weight=True,
-                    q_proj_weight=self.q_proj_weight,
-                    k_proj_weight=self.k_proj_weight,
-                    v_proj_weight=self.v_proj_weight,
-                )
-            attn_output, attn_weights = F.multi_head_attention_forward(**multi_head_attention_forward_kwargs)
-            # attn_output: (seq_len, batch_size, embed_dim)
-            # attn_weights: (batch_size, seq_len, seq_len)
-
-        else:
-            # attn_gate: (batch_size, seq_len, seq_len)
-            # query: (seq_len, batch_size, embed_dim)
-            # key: (seq_len, batch_size, embed_dim)
-            # value: (seq_len, batch_size, embed_dim)
-
-            if self._qkv_same_embed_dim:
-                W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
-                if self.in_proj_bias is not None:
-                    b_q, b_k, b_v = self.in_proj_bias.chunk(3, dim=0)
-                else:
-                    b_q = b_k = b_v = None
+        # query: (batch_size, seq_len, embed_dim)
+        # key: (batch_size, seq_len, embed_dim)
+        # value: (batch_size, seq_len, embed_dim)
+        if self._qkv_same_embed_dim:
+            W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
+            if self.in_proj_bias is not None:
+                b_q, b_k, b_v = self.in_proj_bias.chunk(3, dim=0)
             else:
-                W_q, W_k, W_v = self.q_proj_weight, self.k_proj_weight, self.v_proj_weight
+                b_q = b_k = b_v = None
+        else:
+            W_q, W_k, W_v = (
+                self.q_proj_weight,
+                self.k_proj_weight,
+                self.v_proj_weight,
+            )
 
-            query = F.linear(query, W_q, b_q)
-            key = F.linear(key, W_k, b_k)
-            value = F.linear(value, W_v, b_v)
-            if self.add_bias_kv:
-                key += self.bias_k
-                value += self.bias_v
+        query = F.linear(query, W_q, b_q)
+        key = F.linear(key, W_k, b_k)
+        value = F.linear(value, W_v, b_v)
 
-            batch_size, seq_len, _ = query.size()
+        if self.add_bias_kv:
+            key += self.bias_k
+            value += self.bias_v
 
-            query = query.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
-            key = key.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
-            value = value.repeat(self.num_heads, 1, 1, 1).view(self.num_heads * batch_size, seq_len, self.embed_dim)
+        batch_size, seq_len, _ = query.size()
+        attn_head_biases = torch.zeros((seq_len, seq_len), dtype=query.dtype, device=query.device)
 
-            attn_head_weights = torch.bmm(query, key.transpose(1, 2)) / (self.embed_dim**0.5)
-            attn_head_biases = torch.zeros((seq_len, seq_len), dtype=query.dtype, device=query.device)
+        if is_causal:
+            assert attn_mask is None, "attn_mask is not None when is_causal is True"
+            causal_mask = torch.ones((seq_len, seq_len), dtype=torch.bool, device=query.device).triu(diagonal=0)
+            attn_head_biases.masked_fill_(causal_mask.logical_not(), float("-inf"))
 
-            if is_causal:
-                assert attn_mask is None, "attn_mask is not None when is_causal is True"
-                causal_mask = torch.ones((seq_len, seq_len), dtype=torch.bool, device=query.device).triu(diagonal=0)
-                attn_head_biases.masked_fill_(causal_mask.logical_not(), float("-inf"))
+        if attn_mask is not None:
+            if attn_mask.dtype == torch.bool:
+                attn_head_biases.masked_fill_(attn_mask.logical_not(), float("-inf"))
+            else:
+                attn_head_biases += attn_mask
 
-            if attn_mask is not None:
-                if attn_mask.dtype == torch.bool:
-                    attn_head_biases.masked_fill_(attn_mask.logical_not(), float("-inf"))
-                else:
-                    attn_head_biases += attn_mask
+        query = query.contiguous().view(batch_size * self.num_heads, seq_len, self.head_dim)
+        key = key.contiguous().view(batch_size * self.num_heads, seq_len, self.head_dim)
+        value = value.contiguous().view(batch_size * self.num_heads, seq_len, self.head_dim)
 
-            if key_padding_mask is not None:
-                attn_head_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
-                attn_head_weights = attn_head_weights.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
-                attn_head_weights = attn_head_weights.view(batch_size * self.num_heads, seq_len, seq_len)
-                if average_attn_weights:
-                    attn_head_weights = F.softmax(attn_head_weights, dim=-1)
+        attn_head_weights = torch.bmm(query, key.transpose(1, 2))
+        # attn_head_weights: (batch_size * num_heads, seq_len, seq_len)
+
+        assert tuple(attn_head_weights.size()) == (
+            batch_size * self.num_heads,
+            seq_len,
+            seq_len,
+        ), f"{attn_head_weights.size()=}, expected {(batch_size * self.num_heads, seq_len, seq_len)}"
+
+        if key_padding_mask is not None:
+            attn_head_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
+            attn_head_weights = attn_head_weights.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+            attn_head_weights = attn_head_weights.view(batch_size * self.num_heads, seq_len, seq_len)
 
             # attn_head_weights: (batch_size * num_heads, seq_len, seq_len)
             # attn_gate: (batch_size * num_heads, seq_len, seq_len)
 
-            assert tuple(attn_head_weights.size()) == (batch_size * self.num_heads, seq_len, seq_len)
-            assert tuple(attn_gate.size()) == (
-                batch_size * self.num_heads,
-                seq_len,
-                seq_len,
-            ), f"{attn_gate.size()=}, expected {(batch_size * self.num_heads, seq_len, seq_len)}"
+        num_gate_heads = attn_gate.size(0) // batch_size
+        assert tuple(attn_gate.size()) == (
+            batch_size * num_gate_heads,
+            seq_len,
+            seq_len,
+        ), f"{attn_gate.size()=}, expected {(batch_size * num_gate_heads, seq_len, seq_len)}"
+        # attn_gate: (batch_size * num_gate_heads, seq_len, seq_len)
 
-            if attn_gate is not None:
-                attn_head_weights = attn_head_weights * attn_gate
-                attn_head_weights /= attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
+        if self.num_heads - num_gate_heads > 0:
+            attn_gate = (
+                torch.cat(
+                    [
+                        attn_gate.view(batch_size, num_gate_heads, seq_len, seq_len),
+                        attn_gate.new_ones(
+                            (
+                                batch_size,
+                                self.num_heads - num_gate_heads,
+                                seq_len,
+                                seq_len,
+                            )
+                        ),
+                    ],
+                    dim=1,
+                )
+                .view(batch_size * self.num_heads, seq_len, seq_len)
+                .contiguous()
+            )
 
-            attn_output = torch.bmm(attn_head_weights, value)
-            attn_output = attn_output.chunk(self.num_heads, dim=0)
-            attn_output = torch.cat(attn_output, dim=2)
-            # attn_output: (batch_size, seq_len, embed_dim * num_heads)
-            attn_output = self.out_proj(attn_output)
-            attn_weights = None
-            if need_weights:
-                attn_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
-                if average_attn_weights:
-                    attn_weights = attn_weights.mean(dim=1).contiguous()
+        assert tuple(attn_gate.size()) == (
+            batch_size * self.num_heads,
+            seq_len,
+            seq_len,
+        ), f"{attn_gate.size()=}, expected {(batch_size, seq_len, seq_len)}"
 
-            # attn_output: (batch_size, seq_len, embed_dim)
-            attn_output = attn_output.transpose(1, 0)
-            # attn_output: (seq_len, batch_size, embed_dim)
+        # attn_gate: (batch_size * self.num_heads, seq_len, seq_len)
+        # attn_head_weights: (batch_size * self.num_heads, seq_len, seq_len)
+        attn_head_weights = attn_head_weights * attn_gate
+        attn_head_weights /= attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
+        attn_head_weights = F.softmax(attn_head_weights, dim=-1)
+
+        attn_output = torch.bmm(attn_head_weights, value)
+        # attn_output: (batch_size * num_heads, seq_len, head_dim)
+
+        assert tuple(attn_output.size()) == (
+            batch_size * self.num_heads,
+            seq_len,
+            self.head_dim,
+        ), f"{attn_output.size()=}, expected {(batch_size * self.num_heads, seq_len, self.head_dim)}"
+
+        attn_output = (attn_output.transpose(1, 0).contiguous().view(seq_len, batch_size, self.embed_dim)).contiguous()
+        attn_output = self.out_proj(attn_output)
+        # attn_output: (seq_len, batch_size, embed_dim)
+        # attn_head_weights: (batch_size * num_heads, seq_len, seq_len)
+
+        attn_weights = None
+        if need_weights:
+            attn_weights = attn_head_weights.view(batch_size, self.num_heads, seq_len, seq_len)
+            if average_attn_weights:
+                attn_weights = attn_weights.mean(dim=1).contiguous()
+            else:
+                attn_weights = attn_weights.contiguous()
 
         if self.batch_first:
             attn_output = attn_output.transpose(1, 0)
-
         attn_output = attn_output.contiguous()
+
+        # attn_output: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
+        # attn_weights: (batch_size, seq_len, seq_len)
         return attn_output, attn_weights
 
 

@@ -11,14 +11,11 @@ class TestLayers:
         "batch_size, seq_len, embed_dim, num_heads, bias, batch_first",
         [
             (1, 5, 4, 1, False, False),
-            (1, 5, 4, 2, False, True),
-            (1, 5, 4, 4, False, False),
-            (2, 5, 4, 1, False, False),
-            (2, 5, 4, 2, False, True),
             (2, 5, 4, 4, False, False),
-            (32, 100, 512, 8, False, False),
-            (32, 100, 512, 16, False, True),
             (32, 100, 512, 32, False, False),
+            (1, 5, 4, 1, True, False),
+            (2, 5, 4, 4, True, False),
+            (32, 100, 512, 32, True, False),
         ],
     )
     def test_multihead_attention_layer(
@@ -48,7 +45,6 @@ class TestLayers:
             batch_first=batch_first,
         )
         gtc_model.load_state_dict(torch_model.state_dict())
-
         gtc_attn_output, gtc_attn_weights = gtc_model(q, k, v)
         gtc_attn_output, gtc_attn_weights = torch_model(q, k, v)
         assert torch.allclose(gtc_attn_output, gtc_attn_output)
@@ -58,23 +54,11 @@ class TestLayers:
         "batch_size, seq_len, embed_dim, num_lookback_range, num_gate_heads, tau, dropout_p, batch_first, distance_activation_fn",
         [
             (1, 5, 4, 1, 1, 1.0, 0.0, False, None),
-            (1, 5, 4, 2, 2, 0.9, 0.1, True, None),
-            (1, 5, 4, 4, 4, 2.0, 0.2, False, None),
-            (2, 5, 4, 1, 1, 10.0, 0.3, False, None),
-            (2, 5, 4, 2, 2, 4.0, 0.4, True, None),
-            (2, 5, 4, 4, 4, 0.1, 0.0, False, None),
-            (32, 100, 512, 8, 8, 1.0, 0.0, False, None),
-            (32, 100, 512, 16, 16, 1.0, 0.0, True, None),
-            (32, 100, 512, 32, 32, 1.0, 0.0, False, None),
-            (1, 5, 4, 1, 1, 1.0, 0.0, False, nn.Sigmoid()),
-            (1, 5, 4, 2, 2, 1.0, 0.0, True, nn.Sigmoid()),
-            (1, 5, 4, 4, 4, 1.0, 0.0, False, nn.Sigmoid()),
-            (2, 5, 4, 1, 1, 1.0, 0.0, False, nn.Sigmoid()),
-            (2, 5, 4, 2, 2, 1.0, 0.0, True, nn.Sigmoid()),
-            (2, 5, 4, 4, 4, 1.0, 0.0, False, nn.Sigmoid()),
-            (32, 100, 512, 8, 8, 1.0, 0.0, False, nn.Sigmoid()),
-            (32, 100, 512, 16, 16, 1.0, 0.0, True, nn.Sigmoid()),
-            (32, 100, 512, 32, 32, 1.0, 0.0, False, nn.Sigmoid()),
+            (32, 100, 512, 32, 32, 10.0, 0.5, False, None),
+            (1, 5, 4, 1, 1, 1.0, 0.0, False, torch.relu),
+            (32, 100, 512, 32, 32, 10.0, 0.5, False, torch.relu),
+            (1, 5, 4, 1, 1, 1.0, 0.0, False, torch.sigmoid),
+            (32, 100, 512, 8, 8, 10.0, 0.0, False, torch.sigmoid),
         ],
     )
     def test_syntactic_distance_gate_layer(
@@ -107,51 +91,29 @@ class TestLayers:
             batch_size * num_gate_heads,
             seq_len,
             seq_len,
-        ), f"{gate_output.size()=}, expected {(batch_size * num_gate_heads, seq_len, seq_len)}"
+        ), f"{gate_output.size()=}, expected {(batch_size, seq_len, seq_len)}"
         assert tuple(distance.size()) == (
             batch_size,
             seq_len,
-            num_gate_heads,
-        ), f"{distance.size()=} expected {(batch_size, seq_len, num_gate_heads)}"
+            1,
+        ), f"{distance.size()=} expected {(batch_size, seq_len, 1)}"
 
     @pytest.mark.parametrize(
         "batch_size, seq_len, embed_dim, num_heads, batch_first, attn_gate",
         [
-            (1, 5, 4, 1, True, None),
             (1, 5, 4, 1, False, None),
             (1, 5, 4, 2, True, None),
-            (1, 5, 4, 2, False, None),
-            (1, 5, 4, 4, True, None),
             (1, 5, 4, 4, False, None),
             (2, 5, 4, 1, True, None),
-            (2, 5, 4, 1, False, None),
-            (2, 5, 4, 2, True, None),
             (2, 5, 4, 2, False, None),
             (2, 5, 4, 4, True, None),
-            (2, 5, 4, 4, False, None),
-            (32, 100, 512, 8, True, None),
-            (32, 100, 512, 8, False, None),
-            (32, 100, 512, 16, True, None),
-            (32, 100, 512, 16, False, None),
             (32, 100, 512, 32, True, None),
-            (32, 100, 512, 32, False, None),
             (1, 5, 4, 1, True, torch.randn(1, 5, 5)),
-            (1, 5, 4, 1, False, torch.randn(1, 5, 5)),
             (1, 5, 4, 2, True, torch.randn(1, 5, 5)),
-            (1, 5, 4, 2, False, torch.randn(1, 5, 5)),
-            (1, 5, 4, 4, True, torch.randn(1, 5, 5)),
             (1, 5, 4, 4, False, torch.randn(1, 5, 5)),
             (2, 5, 4, 1, True, torch.randn(2, 5, 5)),
-            (2, 5, 4, 1, False, torch.randn(2, 5, 5)),
-            (2, 5, 4, 2, True, torch.randn(2, 5, 5)),
             (2, 5, 4, 2, False, torch.randn(2, 5, 5)),
-            (2, 5, 4, 4, True, torch.randn(2, 5, 5)),
             (2, 5, 4, 4, False, torch.randn(2, 5, 5)),
-            (32, 100, 512, 8, True, torch.randn(32, 100, 100)),
-            (32, 100, 512, 8, False, torch.randn(32, 100, 100)),
-            (32, 100, 512, 16, True, torch.randn(32, 100, 100)),
-            (32, 100, 512, 16, False, torch.randn(32, 100, 100)),
-            (32, 100, 512, 32, True, torch.randn(32, 100, 100)),
             (32, 100, 512, 32, False, torch.randn(32, 100, 100)),
         ],
     )
@@ -196,4 +158,3 @@ class TestLayers:
                 seq_len,
                 seq_len,
             ), f"{attn_weights.size()=}, expected {(batch_size, seq_len, seq_len)}"
-

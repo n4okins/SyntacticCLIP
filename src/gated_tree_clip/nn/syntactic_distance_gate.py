@@ -35,7 +35,12 @@ class SyntacticDistanceGate(nn.Module):
             nn.BatchNorm1d(in_embed_dim),
             nn.ReLU(),
             nn.Dropout(dropout_p),
-            nn.Conv1d(in_embed_dim, num_gate_heads, num_lookback_range, padding=num_lookback_range),
+            nn.Conv1d(
+                in_embed_dim,
+                num_gate_heads,
+                num_lookback_range,
+                padding=num_lookback_range,
+            ),
         )
         self.distance_activation_fn = distance_activation_fn or nn.Tanh()
 
@@ -70,10 +75,10 @@ class SyntacticDistanceGate(nn.Module):
         lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
         upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
         gate = lower_tri * upper_tri
-        distance = distance.view(batch_size, self.num_gate_heads, seq_len).transpose(1, 2)
+        distance = distance.view(batch_size, self.num_gate_heads, seq_len, 1).mean(dim=1)
 
         gate = gate.contiguous()
         distance = distance.contiguous()
-        # gate := gate  (batch_size, seq_len, seq_len), 0 <= gate <= 1
-        # distance := distance  (batch_size, seq_len, num_gate_heads), -1 <= distance <= 1
+        # gate := gate  (batch_size * num_gate_heads, seq_len, seq_len), 0 <= gate <= 1
+        # distance := distance  (batch_size, seq_len, 1), -1 <= distance <= 1
         return gate, distance
