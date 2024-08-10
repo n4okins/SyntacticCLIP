@@ -61,13 +61,13 @@ class Transformer(nn.Module):
 
         for res_attn_block in self.res_attn_blocks:
             if is_checkpoint and not torch.jit.is_scripting():
-                x, _ = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
+                x, attn_weight = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
             else:
-                x, _ = res_attn_block(x, attn_mask=attention_mask)
+                x, attn_weight = res_attn_block(x, attn_mask=attention_mask)
 
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
-        return x
+        return x, attn_weight
 
 
 class VisionTransformer(Transformer):

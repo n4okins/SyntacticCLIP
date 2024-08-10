@@ -301,7 +301,11 @@ class ResidualAttentionWithSyntacticDistanceBlock(nn.Module):
         key = self.layer_norm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
         value = self.layer_norm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
 
-        attn_gate, distance = self.gate(key)
+        if attn_gate is None:
+            attn_gate, distance = self.gate(key)
+        else:
+            distance = None
+
         attn_out, attn_weight = self.attention(
             _normed_query,
             key,

@@ -10,7 +10,7 @@ from .layernorm import CastLayerNorm
 from .layerscale import LayerScale
 
 logger = getColoredLogger(__name__)
-nn.MultiheadAttention
+logger.setLevel("INFO")
 __all__ = ["ResidualAttentionBlock", "MultiheadAttention"]
 
 
@@ -338,7 +338,7 @@ class ResidualAttentionBlock(nn.Module):
         self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
         self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
 
-        self.attention = MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
 
         self.layer_scale_1 = (
             LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
@@ -384,6 +384,7 @@ class ResidualAttentionBlock(nn.Module):
             need_weights=True,
             attn_mask=attn_mask,
         )
+
         x = query + self.layer_scale_1(attn_out)
         x = x + self.layer_scale_2(self.res_mlp(self.layer_norm_2(x)))
         return x, attn_weight

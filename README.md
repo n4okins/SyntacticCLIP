@@ -11,3 +11,6 @@ GatedTreeTransformer
 GatedTreeVisionTransformer
 GatedTreeTextTransformer
 
+
+# TODO:
+- 自作したMultiheadAttentionの出力が、層を重ねるとnanになってしまう (nn.MultiheadAttentionでは起きない)

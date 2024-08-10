@@ -1,6 +1,7 @@
 # %%
 import gated_tree_clip.nn as gtc_nn
 import torch
+import torch.nn as nn
 from utils.clogging import getColoredLogger
 from utils.initialize import initializer
 
@@ -9,31 +10,71 @@ logger.setLevel("INFO")
 initializer(globals(), logger=logger)
 
 x = torch.randn((2, 5, 4))
-q = k = v = x
-layer = gtc_nn.MultiheadAttention(
+in_layer = gtc_nn.MultiheadAttention(
     embed_dim=4,
     num_heads=2,
 )
-attn_out, attn_weight = layer(q, k, v)
-logger.info(attn_out.shape)
-logger.info(attn_weight.shape)
+for key, param in in_layer.state_dict().items():
+    print(key, param.shape)
 
-
-x = torch.randn((2, 5, 4))
-q = k = v = x
-gate = gtc_nn.SyntacticDistanceGate(
-    in_embed_dim=4,
-    num_gate_heads=1,
-    num_lookback_range=3,
+layers = nn.ModuleList(
+    [
+        gtc_nn.MultiheadAttention(
+            embed_dim=4,
+            num_heads=2,
+        ) for _ in range(16)
+    ]
 )
-layer = gtc_nn.MultiheadAttentionWithGate(embed_dim=4, num_heads=2, batch_first=True)
+attn_out, attn_weight = in_layer(x, x, x)
+for layer in layers:
+    attn_out, attn_weight = layer(attn_out, attn_out, attn_out)
 
-attn_gate, distance = gate(k)
-print(f"{attn_gate.size()=}, {distance.size()=}")
-attn_out, attn_weight = layer(q, k, v, attn_gate=attn_gate)
+print(f"自作: {attn_out=}")
 logger.info(attn_out.shape)
 logger.info(attn_weight.shape)
 
-print(f"{attn_out.size()=}, {attn_weight.size()=}")
+in_layer = gtc_nn.MultiheadAttentionWithGate(
+    embed_dim=4,
+    num_heads=2,
+)
+for key, param in in_layer.state_dict().items():
+    print(key, param.shape)
 
+layers = nn.ModuleList(
+    [
+        gtc_nn.MultiheadAttentionWithGate(
+            embed_dim=4,
+            num_heads=2,
+        ) for _ in range(16)
+    ]
+)
+attn_out, attn_weight = in_layer(x, x, x)
+for layer in layers:
+    attn_out, attn_weight = layer(attn_out, attn_out, attn_out)
+
+print(f"自作 with Gate: {attn_out=}")
+logger.info(attn_out.shape)
+logger.info(attn_weight.shape)
+
+
+
+in_layer = nn.MultiheadAttention(
+    embed_dim=4,
+    num_heads=2,
+)
+for key, param in in_layer.state_dict().items():
+    print(key, param.shape)
+
+attn_out, attn_weight = in_layer(x, x, x)
+layers = nn.ModuleList(
+    [
+        nn.MultiheadAttention(
+            embed_dim=4,
+            num_heads=2,
+        ) for _ in range(16)
+    ]
+)
+logger.info(attn_out.shape)
+logger.info(attn_weight.shape)
+print(f"Torch: {attn_out=}")
 # %%

@@ -61,9 +61,9 @@ class Transformer(nn.Module):
 
         for res_attn_block in self.res_attn_blocks:
             if is_checkpoint and not torch.jit.is_scripting():
-                x = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
+                x, _ = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
             else:
-                x = res_attn_block(x, attention_mask=attention_mask)
+                x, _ = res_attn_block(x, attn_mask=attention_mask)
 
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
