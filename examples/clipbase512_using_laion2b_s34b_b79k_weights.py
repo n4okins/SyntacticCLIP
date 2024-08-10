@@ -103,7 +103,7 @@ transform = transforms.Compose(
 
 url = "http://images.cocodataset.org/val2017/000000039769.jpg"
 image = Image.open(requests.get(url, stream=True).raw).convert("RGB")
-print("\nImage:", url)
+print("\nImage (there are two cats):", url)
 # plt.imshow(image)
 # plt.axis("off")
 # plt.show()
