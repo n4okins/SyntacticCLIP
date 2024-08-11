@@ -6,7 +6,40 @@ import torch
 import torch.nn as nn
 
 
+class HasNanError(Exception):
+    pass
+
+
 class TestLayers:
+    def test_multihead_attention_has_nan(self):
+        batch_size = 4
+        seq_len = 10
+        embed_dim = 64
+        num_heads = 4
+        for i in range(100):
+            x = torch.randn(batch_size, seq_len, embed_dim)
+            mha = gtcnn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+            q = k = v = x
+            y, w = mha(q, k, v)
+            if y.isnan().any():
+                raise HasNanError(f"{y=}, {w=}")
+
+        for i in range(100):
+            x = torch.randn(batch_size, seq_len, embed_dim)
+            mha = gtcnn.MultiheadAttentionWithGate(embed_dim, num_heads, batch_first=True)
+            q = k = v = x
+            y, w = mha(q, k, v, attn_gate=None)
+            if y.isnan().any():
+                raise HasNanError(f"{y=}, {w=}")
+
+        for i in range(100):
+            x = torch.randn(batch_size, seq_len, embed_dim)
+            mha = gtcnn.MultiheadAttentionWithGate(embed_dim, num_heads, batch_first=True)
+            q = k = v = x
+            y, w = mha(q, k, v, attn_gate=torch.randn(batch_size, seq_len, seq_len))
+            if y.isnan().any():
+                raise HasNanError(f"{y=}, {w=}")
+
     @pytest.mark.parametrize(
         "batch_size, seq_len, embed_dim, num_heads, bias, batch_first",
         [
