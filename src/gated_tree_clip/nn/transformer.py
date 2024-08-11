@@ -48,7 +48,8 @@ class Transformer(nn.Module):
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         is_checkpoint: bool = False,
-    ) -> torch.Tensor:
+        return_weight: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, sequence_length, embed_dim] if batch_first else [sequence_length, batch, embed_dim]
@@ -67,7 +68,10 @@ class Transformer(nn.Module):
 
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
-        return x, attn_weight
+
+        if return_weight:
+            return x, attn_weight
+        return x
 
 
 class VisionTransformer(Transformer):
@@ -218,14 +222,14 @@ class TextTransformer(Transformer):
         self.pad_token_id = pad_token_id
 
         self.embedding = nn.Embedding(vocab_size, vocab_embed_dim, padding_idx=pad_token_id)
-        self.positional_embedding = nn.Parameter(torch.empty(max_context_length, vocab_embed_dim))
+        self.positional_embedding = nn.Parameter(torch.zeros(max_context_length, vocab_embed_dim))
 
         self.layernorm_post = CastLayerNorm(normalized_shape=vocab_embed_dim)
 
         self.attention_mask: torch.Tensor
         self.register_buffer(
             "attention_mask",
-            torch.empty(max_context_length, max_context_length).fill_(float("-inf")).triu_(1),
+            torch.zeros(max_context_length, max_context_length).fill_(float("-inf")).triu_(1),
             persistent=False,
         )
 

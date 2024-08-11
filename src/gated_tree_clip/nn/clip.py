@@ -111,10 +111,7 @@ class CLIPBase(nn.Module):
         self, images: torch.Tensor, tokens: torch.Tensor, normalize: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return (
-            self.encode_image(images, normalize),
-            self.encode_text(tokens, normalize),
+            self.encode_image(images, normalize=normalize),
+            self.encode_text(tokens, normalize=normalize),
             self.logit_scale.exp(),
         )
-
-
-class GatedTreeCLIP(CLIPBase): ...

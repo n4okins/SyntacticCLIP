@@ -19,4 +19,5 @@ GatedTreeTextTransformer
     if self.in_proj_bias is not None:
         nn.init.constant_(self.in_proj_bias, 0.0)
     ```
-    の忘れが原因 初期化は大切らしい
+    の忘れが原因
+    `torch.empty`はa tensor filled uninitialized dataだそうなので、必ず初期化すること
