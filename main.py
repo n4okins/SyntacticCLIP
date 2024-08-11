@@ -1,6 +1,4 @@
 # %%
-from typing import Optional, override
-
 import gated_tree_clip.nn as gtcnn
 import open_clip
 import torch
