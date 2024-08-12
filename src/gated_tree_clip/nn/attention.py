@@ -314,7 +314,7 @@ class ResidualAttentionBlock(nn.Module):
         self.layer_norm_1 = CastLayerNorm(normalized_shape=embed_dim)
         self.layer_norm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
 
-        self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
 
         self.layer_scale_1 = (
             LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)

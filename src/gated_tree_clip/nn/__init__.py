@@ -1,5 +1,5 @@
 from .attention import MultiheadAttention, ResidualAttentionBlock
-from .clip import CLIPBase, CLIPEncoder
+from .clip import CLIPBase, CLIPEncoder, SyntacticCLIP
 from .gated_attention import MultiheadAttentionWithGate, ResidualAttentionWithSyntacticDistanceBlock
 from .gated_transformer import (
     TextTransformerWithSyntacticDistance,
@@ -19,6 +19,7 @@ __all__ = [
     "ResidualAttentionWithSyntacticDistanceBlock",
     "SyntacticDistanceGate",
     "CLIPBase",
+    "SyntacticCLIP",
     "CLIPEncoder",
     "CastLayerNorm",
     "LayerScale",

@@ -46,35 +46,40 @@ class Transformer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        *,
         attention_mask: Optional[torch.Tensor] = None,
-        is_checkpoint: bool = False,
-        return_weight: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        return_weights: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, sequence_length, embed_dim] if batch_first else [sequence_length, batch, embed_dim]
             attention_mask: [sequence_length, sequence_length]
-            is_checkpoint: Use checkpointing
+
+        Returns:
+            x: [batch, sequence_length, embed_dim] if batch_first else [sequence_length, batch, embed_dim]
+            attn_weights: [batch or 1, num_layers, sequence_length, sequence_length]
         """
 
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
 
+        if return_weights:
+            ret_weights = []
+
         for res_attn_block in self.res_attn_blocks:
-            if is_checkpoint and not torch.jit.is_scripting():
-                x, attn_weight = torch.utils.checkpoint.checkpoint(res_attn_block, x, None, None, attention_mask)
-            else:
-                x, attn_weight = res_attn_block(x, attn_mask=attention_mask)
+            x, attn_weight = res_attn_block(x, attn_mask=attention_mask)
+            if return_weights:
+                ret_weights.append(attn_weight)
 
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
 
-        if return_weight:
-            return x, attn_weight
-        return x
+        if return_weights:
+            return x, torch.stack(ret_weights, dim=1)
+        return x, attn_weight.unsqueeze(0)
 
 
-class VisionTransformer(Transformer):
+class VisionTransformer(nn.Module):
     """Vision Transformer
     Args:
         embed_dim (int): Embedding dimension
@@ -100,7 +105,10 @@ class VisionTransformer(Transformer):
         patch_stride: Optional[tuple[int, int]] = None,
         patch_dropout_prob: float = 0.0,
     ) -> None:
-        super().__init__(patch_embed_dim, num_heads, num_layers, batch_first)
+        super().__init__()
+        self.transformer = Transformer(
+            patch_embed_dim, num_heads, num_layers, batch_first
+        )
         self.embed_dim = embed_dim
         self.patch_embed_dim = patch_embed_dim
 
@@ -110,7 +118,9 @@ class VisionTransformer(Transformer):
         elif len(input_image_size) == 2:
             input_image_size = (3, *input_image_size)
         elif len(input_image_size) > 3:
-            logger.warnning(f"{input_image_size=} is not a valid image size. Using the first 3 elements.")
+            logger.warnning(
+                f"{input_image_size=} is not a valid image size. Using the first 3 elements."
+            )
             input_image_size = input_image_size[:3]
 
         self.patch_size = patch_size
@@ -120,8 +130,12 @@ class VisionTransformer(Transformer):
         self.input_image_size = input_image_size
 
         # check if the input image size is divisible by the patch size
-        assert input_image_size[1] % patch_size[0] == 0, f"{input_image_size=} {patch_size=} {patch_stride=}"
-        assert input_image_size[2] % patch_size[1] == 0, f"{input_image_size=} {patch_size=} {patch_stride=}"
+        assert (
+            input_image_size[1] % patch_size[0] == 0
+        ), f"{input_image_size=} {patch_size=} {patch_stride=}"
+        assert (
+            input_image_size[2] % patch_size[1] == 0
+        ), f"{input_image_size=} {patch_size=} {patch_stride=}"
 
         self.class_embedding = nn.Parameter(self.scale * torch.randn(patch_embed_dim))
         self.positional_grid_size = (
@@ -144,16 +158,26 @@ class VisionTransformer(Transformer):
             bias=False,
         )
 
-        self.patchdropout_pre = PatchDropout(p=patch_dropout_prob) if patch_dropout_prob > 0 else nn.Identity()
+        self.patchdropout_pre = (
+            PatchDropout(p=patch_dropout_prob)
+            if patch_dropout_prob > 0
+            else nn.Identity()
+        )
         self.layernorm_pre = CastLayerNorm(normalized_shape=patch_embed_dim)
         self.layernorm_post = CastLayerNorm(normalized_shape=patch_embed_dim)
 
-        self.head_weight = nn.Parameter(self.scale * torch.randn(patch_embed_dim, embed_dim))
+        self.head_weight = nn.Parameter(
+            self.scale * torch.randn(patch_embed_dim, embed_dim)
+        )
 
     @override
     def forward(
-        self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, is_checkpoint: bool = False
-    ) -> torch.Tensor:
+        self,
+        x: torch.Tensor,
+        *,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_weights: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, channels, height, width]
@@ -170,13 +194,17 @@ class VisionTransformer(Transformer):
         x = x.reshape(batch_size, self.patch_embed_dim, -1).permute(0, 2, 1)
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, num_patches + 1, self.patch_embed_dim]
-        x = torch.cat([self.class_embedding.view(1, 1, -1).expand(batch_size, -1, -1), x], dim=1)
+        x = torch.cat(
+            [self.class_embedding.view(1, 1, -1).expand(batch_size, -1, -1), x], dim=1
+        )
         x = x + self.positional_embedding
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, num_patches + 1, self.patch_embed_dim]
         x = self.patchdropout_pre(x)
         x = self.layernorm_pre(x)
-        x = super().forward(x, attention_mask=attention_mask, is_checkpoint=is_checkpoint)
+        x, w = self.transformer(
+            x, attention_mask=attention_mask, return_weights=return_weights
+        )
         x = self.layernorm_post(x)
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, self.patch_embed_dim], [batch, num_patches, self.patch_embed_dim]
@@ -185,11 +213,10 @@ class VisionTransformer(Transformer):
 
         # [batch, self.patch_embed_dim] -> [batch, self.embed_dim]
         pooled = pooled @ self.head_weight
+        return pooled, w
 
-        return pooled
 
-
-class TextTransformer(Transformer):
+class TextTransformer(nn.Module):
     """Text Transformer
     Args:
         embed_dim (int): Embedding dimension
@@ -213,23 +240,29 @@ class TextTransformer(Transformer):
         max_context_length: int = 77,
         pad_token_id: int = 0,
     ):
-        super().__init__(vocab_embed_dim, num_heads, num_layers, batch_first)
+        super().__init__()
+        self.transformer = Transformer(embed_dim, num_heads, num_layers, batch_first)
         self.embed_dim = embed_dim
-
         self.vocab_size = vocab_size
         self.vocab_embed_dim = vocab_embed_dim
         self.max_context_length = max_context_length
         self.pad_token_id = pad_token_id
 
-        self.embedding = nn.Embedding(vocab_size, vocab_embed_dim, padding_idx=pad_token_id)
-        self.positional_embedding = nn.Parameter(torch.zeros(max_context_length, vocab_embed_dim))
+        self.embedding = nn.Embedding(
+            vocab_size, vocab_embed_dim, padding_idx=pad_token_id
+        )
+        self.positional_embedding = nn.Parameter(
+            torch.zeros(max_context_length, vocab_embed_dim)
+        )
 
         self.layernorm_post = CastLayerNorm(normalized_shape=vocab_embed_dim)
 
         self.attention_mask: torch.Tensor
         self.register_buffer(
             "attention_mask",
-            torch.zeros(max_context_length, max_context_length).fill_(float("-inf")).triu_(1),
+            torch.zeros(max_context_length, max_context_length)
+            .fill_(float("-inf"))
+            .triu_(1),
             persistent=False,
         )
 
@@ -237,8 +270,12 @@ class TextTransformer(Transformer):
 
     @override
     def forward(
-        self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, is_checkpoint: bool = False
-    ) -> torch.Tensor:
+        self,
+        x: torch.Tensor,
+        *,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_weights: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch, sequence_length]
@@ -248,11 +285,15 @@ class TextTransformer(Transformer):
 
         x = self.embedding(x)
         x = x + self.positional_embedding[:sequence_length]
-        x = super().forward(x, attention_mask=attention_mask or self.attention_mask, is_checkpoint=is_checkpoint)
+        x, w = self.transformer(
+            x,
+            attention_mask=attention_mask or self.attention_mask,
+            return_weights=return_weights,
+        )
         x = self.layernorm_post(x)
 
         # _tokens: unused
         pooled, _tokens = x[torch.arange(batch_size), x_.argmax(dim=-1)], x
         pooled = pooled @ self.head_weight
 
-        return pooled
+        return pooled, w
