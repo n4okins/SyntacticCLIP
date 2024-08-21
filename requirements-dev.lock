@@ -13,6 +13,12 @@ absl-py==2.1.0
     # via chex
     # via optax
     # via orbax-checkpoint
+aiosignal==1.3.1
+    # via ray
+albucore==0.0.13
+    # via albumentations
+albumentations==1.4.14
+    # via img2dataset
 annotated-types==0.7.0
     # via pydantic
 antlr4-python3-runtime==4.9.3
@@ -21,14 +27,26 @@ antlr4-python3-runtime==4.9.3
 anyio==4.4.0
     # via httpx
     # via jupyter-server
+    # via starlette
+    # via watchfiles
+aplus==0.11.0
+    # via vaex-core
+appdirs==1.4.4
+    # via wandb
 argon2-cffi==23.1.0
     # via jupyter-server
 argon2-cffi-bindings==21.2.0
     # via argon2-cffi
 arrow==1.3.0
     # via isoduration
+astropy==6.1.2
+    # via vaex-astro
+astropy-iers-data==0.2024.8.19.0.32.16
+    # via astropy
 asttokens==2.4.1
     # via stack-data
+astunparse==1.6.3
+    # via nvidia-dali-cuda120
 async-lru==2.0.4
     # via jupyterlab
 attrs==23.2.0
@@ -38,58 +56,149 @@ babel==2.15.0
     # via jupyterlab-server
 beautifulsoup4==4.12.3
     # via nbconvert
+blake3==0.4.1
+    # via vaex-core
 bleach==6.1.0
     # via nbconvert
+blis==0.7.11
+    # via thinc
+bokeh==3.5.1
+    # via dask
+bqplot==0.12.43
+    # via ipyvolume
+    # via vaex-jupyter
+braceexpand==0.1.7
+    # via webdataset
+branca==0.7.2
+    # via ipyleaflet
+cachetools==5.5.0
+    # via vaex-server
+catalogue==2.0.10
+    # via spacy
+    # via srsly
+    # via thinc
 certifi==2022.12.7
     # via httpcore
     # via httpx
     # via requests
+    # via sentry-sdk
 cffi==1.16.0
     # via argon2-cffi-bindings
 charset-normalizer==2.1.1
     # via requests
 chex==0.1.86
     # via optax
+click==8.1.7
+    # via dask
+    # via distributed
+    # via ray
+    # via typer
+    # via uvicorn
+    # via wandb
+cloudpathlib==0.18.1
+    # via weasel
+cloudpickle==3.0.0
+    # via dask
+    # via distributed
+    # via vaex-core
 comm==0.2.2
     # via ipykernel
     # via ipywidgets
+confection==0.1.5
+    # via thinc
+    # via weasel
 contourpy==1.2.1
+    # via bokeh
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
+cymem==2.0.8
+    # via preshed
+    # via spacy
+    # via thinc
+dask==2024.8.1
+    # via dask-expr
+    # via distributed
+    # via gated-tree-clip
+    # via vaex-core
+dask-expr==1.1.11
+    # via dask
+dataclasses==0.6
+    # via img2dataset
 debugpy==1.8.2
     # via ipykernel
 decorator==5.1.1
     # via ipython
 defusedxml==0.7.1
     # via nbconvert
+distributed==2024.8.1
+    # via dask
+dm-tree==0.1.8
+    # via nvidia-dali-cuda120
+docker-pycreds==0.4.0
+    # via wandb
 etils==1.7.0
     # via optax
     # via orbax-checkpoint
+eval-type-backport==0.2.0
+    # via albumentations
+exceptiongroup==1.2.2
+    # via anyio
+    # via ipython
+    # via pytest
 executing==2.0.1
     # via stack-data
+exifread-nocycle==3.0.1
+    # via img2dataset
+fastapi==0.112.1
+    # via vaex-server
 fastjsonschema==2.20.0
     # via nbformat
 filelock==3.13.1
     # via huggingface-hub
+    # via ray
     # via torch
     # via transformers
     # via triton
+    # via vaex-core
+fire==0.5.0
+    # via img2dataset
 flax==0.8.5
 fonttools==4.53.1
     # via matplotlib
 fqdn==1.5.1
     # via jsonschema
+frozendict==2.4.4
+    # via vaex-core
+frozenlist==1.4.1
+    # via aiosignal
+    # via ray
 fsspec==2024.2.0
+    # via dask
     # via etils
     # via huggingface-hub
+    # via img2dataset
     # via torch
 ftfy==6.2.0
     # via open-clip-torch
+fugashi==1.3.2
+future==1.0.0
+    # via vaex-core
+gast==0.6.0
+    # via nvidia-dali-cuda120
+gitdb==4.0.11
+    # via gitpython
+gitpython==3.1.43
+    # via wandb
 h11==0.14.0
     # via httpcore
+    # via uvicorn
+h5py==3.11.0
+    # via vaex-hdf5
 httpcore==1.0.5
     # via httpx
+httptools==0.6.1
+    # via uvicorn
 httpx==0.27.0
     # via jupyterlab
 huggingface-hub==0.24.3
@@ -103,16 +212,48 @@ idna==3.4
     # via httpx
     # via jsonschema
     # via requests
+imageio==2.35.0
+    # via scikit-image
+img2dataset==1.45.0
+importlib-metadata==8.4.0
+    # via dask
 importlib-resources==6.4.0
     # via etils
 iniconfig==2.0.0
     # via pytest
+ipadic==1.0.0
+ipydatawidgets==4.3.5
+    # via pythreejs
 ipykernel==6.29.5
     # via jupyterlab
+ipyleaflet==0.19.2
+    # via vaex-jupyter
+ipympl==0.9.4
+    # via vaex-jupyter
 ipython==8.26.0
     # via ipykernel
+    # via ipympl
     # via ipywidgets
+ipython-genutils==0.2.0
+    # via ipympl
+ipyvolume==0.6.3
+    # via vaex-jupyter
+ipyvue==1.11.1
+    # via ipyvolume
+    # via ipyvuetify
+ipyvuetify==1.10.0
+    # via ipyvolume
+    # via vaex-jupyter
+ipywebrtc==0.6.0
+    # via ipyvolume
 ipywidgets==8.1.3
+    # via bqplot
+    # via ipydatawidgets
+    # via ipyleaflet
+    # via ipympl
+    # via ipyvolume
+    # via ipyvue
+    # via pythreejs
 isoduration==20.11.0
     # via jsonschema
 jax==0.4.30
@@ -132,11 +273,17 @@ jaxlib==0.4.30
 jedi==0.19.1
     # via ipython
 jinja2==3.1.3
+    # via bokeh
+    # via branca
+    # via dask
+    # via distributed
     # via jupyter-server
     # via jupyterlab
     # via jupyterlab-server
     # via nbconvert
+    # via spacy
     # via torch
+    # via vaex-ml
 json5==0.9.25
     # via jupyterlab-server
 jsonpointer==3.0.0
@@ -145,6 +292,7 @@ jsonschema==4.23.0
     # via jupyter-events
     # via jupyterlab-server
     # via nbformat
+    # via ray
 jsonschema-specifications==2023.12.1
     # via jsonschema
 jupyter-client==8.6.2
@@ -161,6 +309,8 @@ jupyter-core==5.7.2
     # via nbformat
 jupyter-events==0.10.0
     # via jupyter-server
+jupyter-leaflet==0.19.2
+    # via ipyleaflet
 jupyter-lsp==2.2.5
     # via jupyterlab
 jupyter-server==2.14.2
@@ -179,13 +329,31 @@ jupyterlab-widgets==3.0.11
     # via ipywidgets
 kiwisolver==1.4.5
     # via matplotlib
+langcodes==3.4.0
+    # via spacy
+language-data==1.2.0
+    # via langcodes
+lazy-loader==0.4
+    # via scikit-image
+llvmlite==0.43.0
+    # via numba
+locket==1.0.0
+    # via distributed
+    # via partd
+lz4==4.3.3
+    # via dask
+marisa-trie==1.2.0
+    # via language-data
 markdown-it-py==3.0.0
     # via rich
 markupsafe==2.1.5
     # via jinja2
     # via nbconvert
-matplotlib==3.9.1
+matplotlib==3.9.2
     # via gated-tree-clip
+    # via ipympl
+    # via ipyvolume
+    # via vaex-viz
 matplotlib-inline==0.1.7
     # via ipykernel
     # via ipython
@@ -200,8 +368,14 @@ ml-dtypes==0.4.0
 mpmath==1.3.0
     # via sympy
 msgpack==1.0.8
+    # via distributed
     # via flax
     # via orbax-checkpoint
+    # via ray
+murmurhash==1.0.10
+    # via preshed
+    # via spacy
+    # via thinc
 mypy==1.11.0
 mypy-extensions==1.0.0
     # via mypy
@@ -216,25 +390,54 @@ nbformat==5.10.4
 nest-asyncio==1.6.0
     # via ipykernel
     # via orbax-checkpoint
+    # via vaex-core
 networkx==3.2.1
+    # via scikit-image
     # via torch
 notebook-shim==0.2.4
     # via jupyterlab
+numba==0.60.0
+    # via vaex-ml
 numpy==1.26.3
+    # via albucore
+    # via albumentations
+    # via astropy
+    # via blis
+    # via bokeh
+    # via bqplot
     # via chex
     # via contourpy
+    # via dask
     # via flax
+    # via h5py
+    # via imageio
+    # via ipydatawidgets
+    # via ipympl
+    # via ipyvolume
     # via jax
     # via jaxlib
     # via matplotlib
     # via ml-dtypes
+    # via numba
+    # via opencv-python-headless
     # via opt-einsum
     # via optax
     # via orbax-checkpoint
+    # via pandas
+    # via pyarrow
+    # via pyerfa
+    # via pythreejs
+    # via scikit-image
     # via scipy
+    # via spacy
     # via tensorstore
+    # via thinc
+    # via tifffile
     # via torchvision
     # via transformers
+    # via vaex-core
+    # via webdataset
+    # via xarray
 nvidia-cublas-cu12==12.1.3.1
     # via jax-cuda12-plugin
     # via nvidia-cudnn-cu12
@@ -265,18 +468,28 @@ nvidia-cusparse-cu12==12.1.0.106
     # via jax-cuda12-plugin
     # via nvidia-cusolver-cu12
     # via torch
+nvidia-dali-cuda120==1.40.0
+    # via gated-tree-clip
 nvidia-nccl-cu12==2.20.5
     # via jax-cuda12-plugin
     # via torch
+nvidia-nvimgcodec-cu12==0.3.0.5
+    # via nvidia-dali-cuda120
 nvidia-nvjitlink-cu12==12.1.105
     # via jax-cuda12-plugin
     # via nvidia-cusolver-cu12
     # via nvidia-cusparse-cu12
+nvidia-nvjpeg2k-cu12==0.8.0.38
+    # via gated-tree-clip
 nvidia-nvtx-cu12==12.1.105
     # via torch
 omegaconf==2.3.0
     # via hydra-core
 open-clip-torch==2.26.1
+opencv-python-headless==4.10.0.84
+    # via albucore
+    # via albumentations
+    # via img2dataset
 opt-einsum==3.3.0
     # via jax
 optax==0.2.3
@@ -286,48 +499,104 @@ orbax-checkpoint==0.5.23
 overrides==7.7.0
     # via jupyter-server
 packaging==22.0
+    # via astropy
+    # via bokeh
+    # via dask
+    # via distributed
     # via huggingface-hub
     # via hydra-core
     # via ipykernel
     # via jupyter-server
     # via jupyterlab
     # via jupyterlab-server
+    # via lazy-loader
     # via matplotlib
     # via nbconvert
     # via pytest
+    # via ray
+    # via scikit-image
+    # via spacy
+    # via thinc
     # via transformers
+    # via weasel
+    # via xarray
+pandas==2.2.2
+    # via bokeh
+    # via bqplot
+    # via dask
+    # via dask-expr
+    # via gated-tree-clip
+    # via img2dataset
+    # via vaex-core
+    # via xarray
 pandocfilters==1.5.1
     # via nbconvert
 parso==0.8.4
     # via jedi
+partd==1.4.2
+    # via dask
 pexpect==4.9.0
     # via ipython
 pillow==10.2.0
+    # via bokeh
+    # via imageio
+    # via ipympl
+    # via ipyvolume
     # via matplotlib
+    # via scikit-image
     # via torchvision
+    # via vaex-viz
+pip==24.2
+plac==1.4.3
+    # via unidic
 platformdirs==4.2.2
     # via jupyter-core
 pluggy==1.5.0
     # via pytest
+preshed==3.0.9
+    # via spacy
+    # via thinc
+progressbar2==4.4.2
+    # via vaex-core
 prometheus-client==0.20.0
     # via jupyter-server
 prompt-toolkit==3.0.47
     # via ipython
-protobuf==5.27.2
+protobuf==4.25.4
     # via orbax-checkpoint
+    # via ray
+    # via wandb
 psutil==6.0.0
+    # via distributed
     # via ipykernel
+    # via wandb
 ptyprocess==0.7.0
     # via pexpect
     # via terminado
 pure-eval==0.2.3
     # via stack-data
+pyarrow==15.0.2
+    # via dask
+    # via dask-expr
+    # via img2dataset
+    # via vaex-core
+pyarrow-hotfix==0.6
+    # via dask
 pycparser==2.22
     # via cffi
 pydantic==2.8.2
+    # via albumentations
+    # via confection
+    # via fastapi
+    # via spacy
+    # via thinc
     # via utils
+    # via vaex-core
+    # via weasel
 pydantic-core==2.20.1
     # via pydantic
+pyerfa==2.0.1.4
+    # via astropy
 pygments==2.18.0
     # via ipython
     # via nbconvert
@@ -339,22 +608,42 @@ python-dateutil==2.9.0.post0
     # via arrow
     # via jupyter-client
     # via matplotlib
+    # via pandas
 python-dotenv==1.0.1
     # via utils
+    # via uvicorn
 python-json-logger==2.0.7
     # via jupyter-events
+python-utils==3.8.2
+    # via progressbar2
+pythreejs==2.4.2
+    # via ipyvolume
+pytz==2024.1
+    # via pandas
 pyyaml==6.0.1
+    # via albumentations
+    # via astropy
+    # via bokeh
+    # via dask
+    # via distributed
     # via flax
     # via huggingface-hub
     # via jupyter-events
     # via omegaconf
     # via orbax-checkpoint
+    # via ray
     # via timm
     # via transformers
+    # via uvicorn
+    # via vaex-core
+    # via wandb
+    # via webdataset
 pyzmq==26.0.3
     # via ipykernel
     # via jupyter-client
     # via jupyter-server
+ray==2.34.0
+    # via gated-tree-clip
 referencing==0.35.1
     # via jsonschema
     # via jsonschema-specifications
@@ -364,8 +653,16 @@ regex==2024.7.24
     # via transformers
 requests==2.28.1
     # via huggingface-hub
+    # via ipyvolume
     # via jupyterlab-server
+    # via ray
+    # via spacy
+    # via torchdata
     # via transformers
+    # via unidic
+    # via vaex-core
+    # via wandb
+    # via weasel
 rfc3339-validator==0.1.4
     # via jsonschema
     # via jupyter-events
@@ -374,6 +671,8 @@ rfc3986-validator==0.1.1
     # via jupyter-events
 rich==13.7.1
     # via flax
+    # via typer
+    # via vaex-core
 rpds-py==0.19.1
     # via jsonschema
     # via referencing
@@ -381,49 +680,105 @@ ruff==0.5.5
 safetensors==0.4.3
     # via timm
     # via transformers
+scikit-image==0.24.0
+    # via albumentations
 scipy==1.14.0
+    # via albumentations
     # via jax
     # via jaxlib
+    # via scikit-image
 send2trash==1.8.3
     # via jupyter-server
+sentry-sdk==2.13.0
+    # via wandb
+setproctitle==1.3.3
+    # via wandb
 setuptools==70.0.0
-    # via chex
-    # via torch
+    # via marisa-trie
+    # via spacy
+    # via thinc
+    # via wandb
+shellingham==1.5.4
+    # via typer
 six==1.16.0
     # via asttokens
+    # via astunparse
     # via bleach
+    # via docker-pycreds
+    # via fire
     # via python-dateutil
     # via rfc3339-validator
+    # via vaex-core
+smart-open==7.0.4
+    # via weasel
+smmap==5.0.1
+    # via gitdb
 sniffio==1.3.1
     # via anyio
     # via httpx
+sortedcontainers==2.4.0
+    # via distributed
 soupsieve==2.5
     # via beautifulsoup4
+spacy==3.7.5
+    # via gated-tree-clip
+spacy-legacy==3.0.12
+    # via spacy
+spacy-loggers==1.0.5
+    # via spacy
+srsly==2.4.8
+    # via confection
+    # via spacy
+    # via thinc
+    # via weasel
 stack-data==0.6.3
     # via ipython
+starlette==0.38.2
+    # via fastapi
 sympy==1.12
     # via torch
+tabulate==0.9.0
+    # via vaex-core
+tblib==3.0.0
+    # via distributed
 tensorstore==0.1.63
     # via flax
     # via orbax-checkpoint
+termcolor==2.4.0
+    # via fire
 terminado==0.18.1
     # via jupyter-server
     # via jupyter-server-terminals
+thinc==8.2.5
+    # via spacy
+tifffile==2024.8.10
+    # via scikit-image
 timm==1.0.8
     # via open-clip-torch
 tinycss2==1.3.0
     # via nbconvert
 tokenizers==0.19.1
     # via transformers
+tomli==2.0.1
+    # via albucore
+    # via jupyterlab
+    # via mypy
+    # via pytest
 toolz==0.12.1
     # via chex
+    # via dask
+    # via distributed
+    # via partd
 torch==2.4.0+cu121
     # via gated-tree-clip
     # via open-clip-torch
     # via timm
     # via torchaudio
+    # via torchdata
     # via torchvision
 torchaudio==2.4.0+cu121
+    # via gated-tree-clip
+torchdata==0.7.1
     # via gated-tree-clip
 torchinfo==1.8.0
 torchvision==0.19.0+cu121
@@ -431,20 +786,29 @@ torchvision==0.19.0+cu121
     # via open-clip-torch
     # via timm
 tornado==6.4.1
+    # via bokeh
+    # via distributed
     # via ipykernel
     # via jupyter-client
     # via jupyter-server
     # via jupyterlab
     # via terminado
+    # via vaex-server
 tqdm==4.64.1
     # via gated-tree-clip
     # via huggingface-hub
+    # via img2dataset
     # via open-clip-torch
+    # via spacy
     # via transformers
+    # via unidic
 traitlets==5.14.3
+    # via bqplot
     # via comm
     # via ipykernel
+    # via ipympl
     # via ipython
+    # via ipyvolume
     # via ipywidgets
     # via jupyter-client
     # via jupyter-core
@@ -455,37 +819,119 @@ traitlets==5.14.3
     # via nbclient
     # via nbconvert
     # via nbformat
+    # via pythreejs
+    # via traittypes
+    # via vaex-ml
+traittypes==0.2.1
+    # via bqplot
+    # via ipydatawidgets
+    # via ipyleaflet
+    # via ipyvolume
 transformers==4.43.3
 triton==3.0.0
     # via torch
+typer==0.12.4
+    # via spacy
+    # via weasel
 types-python-dateutil==2.9.0.20240316
     # via arrow
 typing-extensions==4.9.0
+    # via albucore
+    # via albumentations
+    # via anyio
+    # via async-lru
     # via chex
+    # via cloudpathlib
     # via etils
+    # via fastapi
     # via flax
     # via huggingface-hub
+    # via ipython
     # via mypy
     # via orbax-checkpoint
     # via pydantic
     # via pydantic-core
+    # via python-utils
     # via torch
+    # via typer
+    # via uvicorn
+tzdata==2024.1
+    # via pandas
+unidic==1.1.0
+    # via fugashi
 uri-template==1.3.0
     # via jsonschema
 urllib3==1.26.13
+    # via distributed
     # via requests
-utils @ git+https://github.com/n4okins/utils.git@69a4c0d4a3d17b25383e9cc29c287bccc4f4c604
+    # via sentry-sdk
+    # via torchdata
+utils @ git+https://github.com/n4okins/utils.git@c4d9da44562fc9ca39f77a954a39acee88a5f0ed
+uvicorn==0.30.6
+    # via vaex-server
+uvloop==0.20.0
+    # via uvicorn
+vaex==4.17.0
+    # via gated-tree-clip
+vaex-astro==0.9.3
+    # via vaex
+vaex-core==4.17.1
+    # via vaex
+    # via vaex-astro
+    # via vaex-hdf5
+    # via vaex-jupyter
+    # via vaex-ml
+    # via vaex-server
+    # via vaex-viz
+vaex-hdf5==0.14.1
+    # via vaex
+vaex-jupyter==0.8.2
+    # via vaex
+vaex-ml==0.18.3
+    # via vaex
+vaex-server==0.9.0
+    # via vaex
+vaex-viz==0.5.4
+    # via vaex
+    # via vaex-jupyter
+wandb==0.16.6
+    # via img2dataset
+wasabi==0.10.1
+    # via spacy
+    # via thinc
+    # via unidic
+    # via weasel
+watchfiles==0.23.0
+    # via uvicorn
 wcwidth==0.2.13
     # via ftfy
     # via prompt-toolkit
+weasel==0.4.1
+    # via spacy
 webcolors==24.6.0
     # via jsonschema
+webdataset==0.2.96
+    # via img2dataset
 webencodings==0.5.1
     # via bleach
     # via tinycss2
 websocket-client==1.8.0
     # via jupyter-server
+websockets==13.0
+    # via uvicorn
+wheel==0.44.0
+    # via astunparse
 widgetsnbextension==4.0.11
     # via ipywidgets
+wrapt==1.16.0
+    # via smart-open
+xarray==2024.3.0
+    # via vaex-jupyter
+xyzservices==2024.6.0
+    # via bokeh
+    # via ipyleaflet
+zict==3.0.0
+    # via distributed
 zipp==3.19.2
     # via etils
+    # via importlib-metadata

@@ -9,56 +9,48 @@ logger = getColoredLogger(__name__)
 
 
 class SyntacticDistanceGate(nn.Module):
+    """
+    Syntactic Distance Gate
+    - https://aclanthology.org/2021.acl-srw.33/
+    """
+
     def __init__(
         self,
-        in_embed_dim: int,
-        num_lookback_range: int,
+        embed_dim: int,
+        num_lookback_range: int = 3,
         num_gate_heads: int = 2,
         *,
         tau: float = 1.0,
         dropout_p: float = 0.0,
-        batch_first: bool = True,
         distance_activation_fn: Optional[Callable] = None,
+        mask_triu: bool = False,
     ):
         super().__init__()
         self.lookback_range = num_lookback_range
-        self.batch_first = batch_first
         self.tau = tau
         self.num_gate_heads = num_gate_heads
         self.conv = nn.Sequential(
             nn.Dropout(dropout_p),
-            nn.Conv1d(in_embed_dim, in_embed_dim, 1),
-            nn.BatchNorm1d(in_embed_dim),
-            nn.ReLU(),
+            nn.Conv1d(embed_dim, embed_dim, 1),
+            nn.GELU(),
             nn.Dropout(dropout_p),
-            nn.Conv1d(in_embed_dim, in_embed_dim, 1),
-            nn.BatchNorm1d(in_embed_dim),
-            nn.ReLU(),
+            nn.Conv1d(embed_dim, embed_dim, 1),
+            nn.GELU(),
             nn.Dropout(dropout_p),
             nn.Conv1d(
-                in_embed_dim,
+                embed_dim,
                 num_gate_heads,
                 num_lookback_range,
                 padding=num_lookback_range,
             ),
         )
         self.distance_activation_fn = distance_activation_fn or nn.Tanh()
+        self.mask_triu = mask_triu
 
     def forward(self, x: torch.Tensor):
-        # x: (batch_size, seq_len, embed_dim) or (seq_len, batch_size, embed_dim)
-        # gate: (batch_size, seq_len, seq_len)
-        # distance: (batch_size, seq_len, 1)
-        if x.dim() == 2:
-            if self.batch_first:
-                x = x.unsqueeze(0)
-            else:
-                x = x.unsqueeze(1)
-
-        if self.batch_first:
-            x = x.transpose(1, 2)
-        else:
-            x = x.permute(1, 2, 0)
-
+        # x: (batch_size, seq_len, embed_dim)
+        x = x.transpose(1, 2)
+        # x: (batch_size, embed_dim, seq_len)
         batch_size, embed_dim, seq_len = x.size()
 
         # distance: Syntactic Distance [d_i, ...]: i番目の単語の構文距離 (構文高？)
@@ -72,13 +64,15 @@ class SyntacticDistanceGate(nn.Module):
         distance = distance.view(batch_size * self.num_gate_heads, seq_len, 1)
         # distance: (batch_size * num_gates_heads, seq_len, 1)
         alpha = (F.hardtanh((distance - distance.transpose(2, 1)) * self.tau) + 1) / 2
-        lower_tri = alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)
-        upper_tri = torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)
-        gate = lower_tri * upper_tri
         distance = distance.view(batch_size, self.num_gate_heads, seq_len, 1).mean(dim=1)
-
-        gate = gate.contiguous()
         distance = distance.contiguous()
+
+        lower_tri = (alpha.tril(diagonal=-1) + torch.ones_like(alpha).triu(diagonal=0)).flip([-1]).cumprod(dim=-1).flip([-1])
+        if self.mask_triu:
+            return lower_tri, distance
+
+        upper_tri = (torch.ones_like(alpha).tril(diagonal=0) + alpha.triu(diagonal=1)).cumprod(dim=-1)
+        gate = lower_tri * upper_tri
         # gate := gate  (batch_size * num_gate_heads, seq_len, seq_len), 0 <= gate <= 1
         # distance := distance  (batch_size, seq_len, 1), -1 <= distance <= 1
         return gate, distance

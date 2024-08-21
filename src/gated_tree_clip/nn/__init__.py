@@ -1,33 +1,14 @@
-from .attention import MultiheadAttention, ResidualAttentionBlock
-from .clip import CLIPBase, CLIPEncoder, SyntacticCLIP
-from .gated_attention import MultiheadAttentionWithGate, ResidualAttentionWithSyntacticDistanceBlock
-from .gated_transformer import (
-    TextTransformerWithSyntacticDistance,
-    TransformerWithSyntacticDistance,
-    VisionTransformerWithSyntacticDistance,
+from .activation import QuickGELU
+from .attention import GatedMultiheadAttention, MultiheadAttention, ResidualAttentionBlock, ResidualGatedAttentionBlock
+from .clip import CLIP, SyntacticCLIP
+from .criterion import ContrastiveLoss
+from .dropout import FairseqDropout, PatchDropout
+from .misc import LayerScale, SyntacticDistanceGate
+from .normalization import CastLayerNorm
+from .transformer import (
+    SyntacticTextTransformer,
+    SyntacticVisionTransformer,
+    TextTransformer,
+    Transformer,
+    VisionTransformer,
 )
-from .layernorm import CastLayerNorm
-from .layerscale import LayerScale
-from .patch_dropout import PatchDropout
-from .syntactic_distance_gate import SyntacticDistanceGate
-from .transformer import TextTransformer, Transformer, VisionTransformer
-
-__all__ = [
-    "MultiheadAttention",
-    "ResidualAttentionBlock",
-    "MultiheadAttentionWithGate",
-    "ResidualAttentionWithSyntacticDistanceBlock",
-    "SyntacticDistanceGate",
-    "CLIPBase",
-    "SyntacticCLIP",
-    "CLIPEncoder",
-    "CastLayerNorm",
-    "LayerScale",
-    "PatchDropout",
-    "Transformer",
-    "TextTransformer",
-    "VisionTransformer",
-    "TransformerWithSyntacticDistance",
-    "TextTransformerWithSyntacticDistance",
-    "VisionTransformerWithSyntacticDistance",
-]

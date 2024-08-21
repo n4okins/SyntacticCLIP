@@ -11,11 +11,15 @@ wheels/
 
 # venv
 .venv
+venv
 
 # pytest
 .pytest_cache/
 .vscode/
 ignores/
 models/
+wandb/
 
 *.out
+*.pt
+*.pth
