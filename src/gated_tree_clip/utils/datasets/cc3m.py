@@ -15,81 +15,75 @@ from ..magicvalues import MagicNumbers
 logger = getColoredLogger(__name__)
 
 
-class DALICC3MDataLoader:
-    def __init__(
-        self,
-        path_to_cc3m_split: Path,
-        batch_size: int = 1,
-        num_threads: int = 2,
-        device_id: int = 0,
-        seed: int = 0,
-        shuffle: bool = False,
-        reader_name: str = "CC3MReader",
-        dali_device: Literal["cpu", "gpu"] = "gpu",
-    ):
-        self.path_to_cc3m_split = path_to_cc3m_split
-        self.batch_size = batch_size
-        self.num_threads = num_threads
-        self.device_id = device_id
-        self.seed = seed
-        self.dali_device = dali_device
+@pipeline_def
+def build_cc3m(
+    path_to_cc3m_split: Path,
+    num_shards: int = 2,
+    shard_id: int = 0,
+    shuffle: bool = False,
+    dali_device: Literal["cpu", "gpu"] = "gpu",
+    reader_name: str = "CC3MReader",
+):
+    """
+    Pipeline to load the CC3M dataset.
 
-        self.dali_iterator = DALIGenericIterator(
-            self.build(
-                path_to_cc3m_split,
-                batch_size=batch_size,
-                num_threads=num_threads,
-                device_id=device_id,
-                seed=seed,
-                shuffle=shuffle,
-                reader_name=reader_name,
-            ),
+    Args:
+        path_to_cc3m_split (Path): Path to the CC3M split.
+        num_shards (int, optional): Number of shards. Defaults to 2.
+        shard_id (int, optional): Shard ID. Defaults to 0.
+        shuffle (bool, optional): Whether to shuffle the dataset. Defaults to False.
+        dali_device (Literal["cpu", "gpu"], optional): DALI device. Defaults to "gpu".
+        reader_name (str, optional): Name of the reader. Defaults to "CC3MReader".
+
+    Usage:
+        train_dataloader_params = dict(
+            path_to_cc3m_split=CC3M_DIR / "Training",
+            num_threads=4,
+            batch_size=batch_size,
+            num_shards=world_size,
+            device_id=local_rank,
+            seed=seed + local_rank,
+            shard_id=local_rank,
+            shuffle=True,
+        )
+        train_dataloader = DALIGenericIterator(
+            build_cc3m(**train_dataloader_params),
             ["jpg", "json"],
             dynamic_shape=False,
             auto_reset=True,
             prepare_first_batch=False,
-            reader_name=reader_name,
+            reader_name="CC3MReader",
             last_batch_policy=LastBatchPolicy.DROP,
         )
-
-    @pipeline_def
-    def build(self, path_to_cc3m_split: Path, shuffle: bool = True, reader_name: str = "CC3MReader"):
-        # (in zsh) > for f (./path/to/*.tar) {wds2idx $f $f:r.index}
-        cc3m_tarfiles = list(path_to_cc3m_split.glob("*.tar"))
-        cc3m_index_files = (tar.with_suffix(".index") for tar in cc3m_tarfiles)
-        cc3m_tarfiles = list(map(str, sorted(cc3m_tarfiles)))
-        cc3m_index_files = list(map(str, sorted(cc3m_index_files)))
-        logger.info(f"{len(cc3m_tarfiles)=}, {len(cc3m_index_files)=}")
-        img_raw, info = fn.readers.webdataset(
-            paths=cc3m_tarfiles,
-            index_paths=cc3m_index_files,
-            ext=["jpg", "json"],
-            missing_component_behavior="error",
-            random_shuffle=shuffle,
-            name=reader_name,
-        )
-        img = fn.decoders.image(img_raw, device="mixed", output_type=types.RGB)
-        img = fn.resize(img, device=self.dali_device, resize_x=224, resize_y=224)
-        img = img / 255.0
-        img = fn.crop_mirror_normalize(
-            img,
-            dtype=types.FLOAT,
-            device=self.dali_device,
-            mean=MagicNumbers.RGB_CLIP_IMAGE_MEAN,
-            std=MagicNumbers.RGB_CLIP_IMAGE_STD,
-        )
-        return img, fn.pad(info, device="cpu")
-
-    def __next__(self):
-        data = next(self.dali_iterator)
-        if data:
-            data = data[0]
-        images, metadata = data["jpg"], data["json"].numpy()
-        metadata = [json.loads("".join([chr(o) for o in row.tolist() if o != 0])) for row in metadata]
-        return images, metadata
-
-    def __iter__(self):
-        return self
-
-    def __len__(self):
-        return len(self.dali_iterator)
+        for data in train_dataloader:
+            if data:
+                data = data[0]
+            images, metadata = data["jpg"], data["json"].numpy()
+            metadata = [json.loads("".join([chr(o) for o in row.tolist() if o != 0])) for row in metadata]
+            ...
+    """
+    # (in zsh) > for f (./path/to/*.tar) {wds2idx $f $f:r.index}
+    cc3m_tarfiles = list(path_to_cc3m_split.glob("*.tar"))
+    cc3m_index_files = (tar.with_suffix(".index") for tar in cc3m_tarfiles)
+    cc3m_tarfiles = list(map(str, sorted(cc3m_tarfiles)))
+    cc3m_index_files = list(map(str, sorted(cc3m_index_files)))
+    logger.info(f"{len(cc3m_tarfiles)=}, {len(cc3m_index_files)=}")
+    img_raw, info = fn.readers.webdataset(
+        paths=cc3m_tarfiles,
+        index_paths=cc3m_index_files,
+        ext=["jpg", "json"],
+        missing_component_behavior="error",
+        random_shuffle=shuffle,
+        name=reader_name,
+    )
+    img = fn.decoders.image(img_raw, device="mixed", output_type=types.RGB)
+    img = fn.resize(img, device=dali_device, resize_x=224, resize_y=224)
+    img = img / 255.0
+    img = fn.crop_mirror_normalize(
+        img,
+        dtype=types.FLOAT,
+        device=dali_device,
+        mean=MagicNumbers.RGB_CLIP_IMAGE_MEAN,
+        std=MagicNumbers.RGB_CLIP_IMAGE_STD,
+    )
+    return img, fn.pad(info, device="cpu")

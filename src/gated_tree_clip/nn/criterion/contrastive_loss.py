@@ -22,7 +22,7 @@ class ContrastiveLoss(nn.Module):
         # Apply label smoothing
         N = logits.size(0)
         smoothed_labels = torch.full_like(logits, self.smoothing / (N - 1))
-        smoothed_labels.scatter_(1, labels.unsqueeze(1), 1.0 - self.smoothing)
+        smoothed_labels = smoothed_labels.scatter(1, labels.unsqueeze(1), 1.0 - self.smoothing)
 
         # Calculate loss manually using log-softmax and smoothed labels
         log_probs = F.log_softmax(logits, dim=1)
@@ -32,3 +32,4 @@ class ContrastiveLoss(nn.Module):
         loss_txt = -(smoothed_labels * log_probs).sum(dim=1).mean()
 
         return loss_img, loss_txt
+2

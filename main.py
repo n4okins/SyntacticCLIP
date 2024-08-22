@@ -1,14 +1,21 @@
 # %%
 import os
+from pathlib import Path
+from typing import Any, Iterable, Optional
 
 import gated_tree_clip.nn as gtcnn
 import open_clip
-import requests
 import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.optim
+import torch.utils.data
+import torch.utils.data.distributed
 import torchinfo
-from gated_tree_clip.nn.clip.convert import convert_model_params_laion2b_s34b_b79k_to_CLIP512
-from PIL import Image
-from torchvision import transforms
+from gated_tree_clip.nn.clip.convert.from_laion2b_s34b_b79k import convert_model_params_laion2b_s34b_b79k_to_CLIP512
+from gated_tree_clip.utils.datasets.cc3m import DALICC3MDataLoader
+from torch.nn.parallel import DistributedDataParallel
+from tqdm.auto import tqdm
 from utils.clogging import getColoredLogger
 from utils.initialize import initializer
 
@@ -16,10 +23,13 @@ logger = getColoredLogger(__name__)
 logger.setLevel("DEBUG")
 PROJECT_ROOT = initializer(globals(), logger=logger)
 logger.info(f"{PROJECT_ROOT=}")
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 def inference():
+    import requests
+    from PIL import Image
+    from torchvision import transforms
+
     tokenizer = open_clip.get_tokenizer("ViT-B-32")
     openclip_model, _, transform_openclip = open_clip.create_model_and_transforms(
         "ViT-B-32", pretrained="laion2b_s34b_b79k", cache_dir=os.environ.get("HUGGINGFACE_HUB_CACHE", None)
@@ -41,8 +51,8 @@ def inference():
     print(f"{sentences=}")
     tokens = tokenizer(sentences)
 
-    model = gtcnn.SyntacticCLIP(512)
-    n = 12
+    model = gtcnn.CLIP(512)
+    n = 9
     model_path = PROJECT_ROOT / "models" / f"{model.__class__.__name__}" / f"{model.__class__.__name__}-Freeze{n:02d}.pth"
     if False and model_path.exists():
         logger.info(f"loading model from {model_path}")
@@ -69,4 +79,3 @@ def inference():
 
 
 inference()
-# %%

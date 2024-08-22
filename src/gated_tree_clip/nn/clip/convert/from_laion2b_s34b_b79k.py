@@ -7,6 +7,7 @@ def convert_model_params_laion2b_s34b_b79k_to_CLIP512(
     convert_num_layers: int = 12,
     verbose: bool = False,
     freeze: bool = False,
+    is_distributed: bool = False,
 ) -> CLIP:
     model_laion2b_s34b_b79k_state_dict = model_laion2b_s34b_b79k.state_dict()
     weight_mapping = {
@@ -59,7 +60,8 @@ def convert_model_params_laion2b_s34b_b79k_to_CLIP512(
     target_model_state_dict = target_model.state_dict()
     for k, v in weight_mapping.items():
         assert (
-            model_laion2b_s34b_b79k_state_dict[k].shape == target_model_state_dict[v].shape
+            model_laion2b_s34b_b79k_state_dict[k].shape
+            == target_model_state_dict[v].shape
         ), f"{k=}, {v=}, {model_laion2b_s34b_b79k_state_dict[k].shape=}, {target_model_state_dict[v].shape=}"
         if verbose:
             print(k, "->", v)

@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from ..activation import QuickGELU
 from ..misc import LayerScale, SyntacticDistanceGate
 from ..normalization import CastLayerNorm
 from .gated_multihead_attention import GatedMultiheadAttention
@@ -44,9 +45,15 @@ class ResidualGatedAttentionBlock(nn.Module):
         self.init_layer_scale_ratio = init_layer_scale_ratio
 
         self.layernorm_1 = CastLayerNorm(normalized_shape=embed_dim)
-        self.layernorm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
+        self.layernorm_1_kv = (
+            CastLayerNorm(normalized_shape=embed_dim)
+            if is_cross_attention
+            else nn.Identity()
+        )
 
-        self.attention = GatedMultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = GatedMultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first
+        )
         self.gate = SyntacticDistanceGate(
             embed_dim=embed_dim,
             num_lookback_range=num_lookback_range,
@@ -67,7 +74,7 @@ class ResidualGatedAttentionBlock(nn.Module):
             if res_mlp
             else nn.Sequential(
                 nn.Linear(in_features=embed_dim, out_features=res_mlp_dim),
-                nn.GELU(),
+                QuickGELU(),
                 nn.Linear(in_features=res_mlp_dim, out_features=embed_dim),
             )
         )
@@ -95,8 +102,16 @@ class ResidualGatedAttentionBlock(nn.Module):
 
         attn_mask = attn_mask.to(query.dtype) if attn_mask is not None else None
         _normed_query = self.layernorm_1(query)
-        key = self.layernorm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
-        value = self.layernorm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
+        key = (
+            self.layernorm_1_kv(key)
+            if self.is_cross_attention and key is not None
+            else _normed_query
+        )
+        value = (
+            self.layernorm_1_kv(value)
+            if self.is_cross_attention and value is not None
+            else _normed_query
+        )
 
         if attn_gate is None:
             attn_gate, distance = self.gate(key)

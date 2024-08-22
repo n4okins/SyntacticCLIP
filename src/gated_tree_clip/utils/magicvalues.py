@@ -2,13 +2,8 @@ import os
 from dataclasses import dataclass
 
 from utils.clogging import getColoredLogger
-from utils.initialize import initializer
 
 logger = getColoredLogger(__name__)
-logger.setLevel("DEBUG")
-PROJECT_ROOT = initializer(globals(), logger=logger)
-logger.info(f"{PROJECT_ROOT=}")
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 __all__ = ["MagicNumbers"]

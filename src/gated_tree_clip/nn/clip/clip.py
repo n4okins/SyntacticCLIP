@@ -16,22 +16,46 @@ class CLIP(nn.Module):
     def __init__(
         self,
         embed_dim: int = 512,
-        visual_backbone: Optional[VisionTransformer] = None,
-        textual_backbone: Optional[TextTransformer] = None,
+        visual_num_heads: int = 12,
+        visual_num_layers: int = 12,
+        textual_num_heads: int = 8,
+        textual_num_layers: int = 12,
+        *,
+        input_image_size: int | tuple[int, int] | tuple[int, int, int] = 224,
+        patch_embed_dim: int = 768,
+        patch_size: tuple[int, int] = (32, 32),
+        patch_stride: Optional[tuple[int, int]] = None,
+        patch_dropout_prob: float = 0.0,
+        vocab_size: int = 49408,
+        vocab_embed_dim: int = 512,
+        max_context_length: int = 77,
+        pad_token_id: int = 0,
+        visual_backbone: Optional[nn.Module] = None,
+        textual_backbone: Optional[nn.Module] = None,
     ):
         super().__init__()
         if visual_backbone is None:
             visual_backbone = VisionTransformer(
                 embed_dim=embed_dim,
-                num_heads=12,
-                num_layers=12,
+                num_heads=visual_num_heads,
+                num_layers=visual_num_layers,
+                batch_first=True,
+                input_image_size=input_image_size,
+                patch_embed_dim=patch_embed_dim,
+                patch_size=patch_size,
+                patch_stride=patch_stride,
+                patch_dropout_prob=patch_dropout_prob,
             )
 
         if textual_backbone is None:
             textual_backbone = TextTransformer(
                 embed_dim=embed_dim,
-                num_heads=8,
-                num_layers=12,
+                num_heads=textual_num_heads,
+                num_layers=textual_num_layers,
+                vocab_size=vocab_size,
+                vocab_embed_dim=vocab_embed_dim,
+                max_context_length=max_context_length,
+                pad_token_id=pad_token_id,
             )
         self.embed_dim = embed_dim
         self.visual = visual_backbone
@@ -46,13 +70,13 @@ class CLIP(nn.Module):
     def encode_image(self, image: torch.Tensor, normalize: bool = True):
         feats, *_ = self.visual(image)
         if normalize:
-            feats /= feats.norm(dim=-1, keepdim=True)
+            feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats
 
     def encode_text(self, text: torch.Tensor, normalize: bool = True):
         feats, *_ = self.textual(text)
         if normalize:
-            feats /= feats.norm(dim=-1, keepdim=True)
+            feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats
 
     def get_features(

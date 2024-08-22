@@ -165,7 +165,7 @@ class GatedMultiheadAttention(MultiheadAttention):
         # attn_gate: (batch_size * self.num_heads, seq_len, seq_len)
         # attn_head_weights: (batch_size * self.num_heads, seq_len, seq_len)
         attn_head_weights = attn_head_weights * attn_gate
-        attn_head_weights /= attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
+        attn_head_weights = attn_head_weights / attn_head_weights.sum(dim=-1, keepdim=True) + attn_weight_div_delta
         attn_head_weights = F.softmax(attn_head_weights, dim=-1)
 
         attn_output = torch.bmm(attn_head_weights, value)

@@ -3,8 +3,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..normalization import CastLayerNorm
 from ..misc import LayerScale
+from ..normalization import CastLayerNorm
 from .multihead_attention import MultiheadAttention
 
 __all__ = ["ResidualAttentionBlock"]
@@ -43,9 +43,15 @@ class ResidualAttentionBlock(nn.Module):
         self.init_layer_scale_ratio = init_layer_scale_ratio
 
         self.layernorm_1 = CastLayerNorm(normalized_shape=embed_dim)
-        self.layernorm_1_kv = CastLayerNorm(normalized_shape=embed_dim) if is_cross_attention else nn.Identity()
+        self.layernorm_1_kv = (
+            CastLayerNorm(normalized_shape=embed_dim)
+            if is_cross_attention
+            else nn.Identity()
+        )
 
-        self.attention = MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first)
+        self.attention = MultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first
+        )
 
         self.layerscale_1 = (
             LayerScale(embed_dim=embed_dim, init_scale_ratio=init_layer_scale_ratio)
@@ -81,8 +87,16 @@ class ResidualAttentionBlock(nn.Module):
         attn_mask = attn_mask.to(query.dtype) if attn_mask is not None else None
 
         _normed_query = self.layernorm_1(query)
-        key = self.layernorm_1_kv(key) if self.is_cross_attention and key is not None else _normed_query
-        value = self.layernorm_1_kv(value) if self.is_cross_attention and value is not None else _normed_query
+        key = (
+            self.layernorm_1_kv(key)
+            if self.is_cross_attention and key is not None
+            else _normed_query
+        )
+        value = (
+            self.layernorm_1_kv(value)
+            if self.is_cross_attention and value is not None
+            else _normed_query
+        )
 
         attn_out, attn_weight = self.attention(
             _normed_query,
