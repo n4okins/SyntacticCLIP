@@ -14,7 +14,7 @@ class SyntacticCLIP(CLIP):
     def __init__(
         self,
         embed_dim: int = 512,
-        visual_num_heads: int = 12,
+        visual_num_heads: int = 8,
         visual_num_layers: int = 12,
         textual_num_heads: int = 8,
         textual_num_layers: int = 12,
@@ -41,3 +41,4 @@ class SyntacticCLIP(CLIP):
             textual_backbone=textual_backbone,
             **kwargs,
         )
+# %%

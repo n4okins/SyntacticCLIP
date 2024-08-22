@@ -14,6 +14,8 @@ from ..magicvalues import MagicNumbers
 
 logger = getColoredLogger(__name__)
 
+__all__ = ["build_cc3m"]
+
 
 @pipeline_def
 def build_cc3m(

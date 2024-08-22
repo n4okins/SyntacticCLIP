@@ -866,7 +866,7 @@ urllib3==1.26.13
     # via requests
     # via sentry-sdk
     # via torchdata
-utils @ git+https://github.com/n4okins/utils.git@c4d9da44562fc9ca39f77a954a39acee88a5f0ed
+utils @ git+https://github.com/n4okins/utils.git@87dd5f5780089decf1a697deb2225febf5a22697
 uvicorn==0.30.6
     # via vaex-server
 uvloop==0.20.0

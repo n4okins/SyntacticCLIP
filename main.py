@@ -1,81 +1,77 @@
 # %%
 import os
-from pathlib import Path
-from typing import Any, Iterable, Optional
+from datetime import datetime
 
-import gated_tree_clip.nn as gtcnn
-import open_clip
 import torch
 import torch.nn as nn
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
-import torchinfo
-from gated_tree_clip.nn.clip.convert.from_laion2b_s34b_b79k import convert_model_params_laion2b_s34b_b79k_to_CLIP512
-from gated_tree_clip.utils.datasets.cc3m import DALICC3MDataLoader
 from torch.nn.parallel import DistributedDataParallel
-from tqdm.auto import tqdm
 from utils.clogging import getColoredLogger
+from utils.dummy import DummyObject
 from utils.initialize import initializer
 
+# Logger Settings
 logger = getColoredLogger(__name__)
 logger.setLevel("DEBUG")
+
+# Project Init
 PROJECT_ROOT = initializer(globals(), logger=logger)
-logger.info(f"{PROJECT_ROOT=}")
+PROJECT_NAME = "misc"
+USE_WANDB_LOG = False
 
+# Torch distributed settings
+WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
+LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
+IS_DISTRIBUTED = WORLD_SIZE > 1
+IS_CUDA_AVAILABLE = torch.cuda.is_available()
+if IS_DISTRIBUTED:
+    WORLD_SIZE = torch.distributed.get_world_size()
+    LOCAL_RANK = torch.distributed.get_rank()
+    torch.distributed.init_process_group(backend="nccl", init_method="env://")
+    logger.info(f"LOCAL_RANK={LOCAL_RANK}, WORLD_SIZE={WORLD_SIZE}")
 
-def inference():
-    import requests
-    from PIL import Image
-    from torchvision import transforms
+if USE_WANDB_LOG and LOCAL_RANK == 0:
+    import wandb
 
-    tokenizer = open_clip.get_tokenizer("ViT-B-32")
-    openclip_model, _, transform_openclip = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="laion2b_s34b_b79k", cache_dir=os.environ.get("HUGGINGFACE_HUB_CACHE", None)
-    )
-    openclip_model.eval()
+    wandb.init(project=PROJECT_NAME, save_code=True)
+else:
+    wandb = DummyObject()
 
-    transform = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-        ]
-    )
+PROJECT_INFOMATION_DICT = dict(
+    TIMESTAMP=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    PROJECT_ROOT=PROJECT_ROOT,
+    PROJECT_NAME=PROJECT_NAME,
+    WORLD_SIZE=WORLD_SIZE,
+    LOCAL_RANK=LOCAL_RANK,
+    IS_DISTRIBUTED=IS_DISTRIBUTED,
+    USE_WANDB_LOG=USE_WANDB_LOG,
+    TORCH_VERSION=torch.__version__,
+    IS_CUDA_AVAILABLE=IS_CUDA_AVAILABLE,
+    TORCH_CUDA_VERSION=torch.version.cuda,
+    TORCH_CUDNN_VERSION=torch.backends.cudnn.version(),
+    TORCH_DEVICE_COUNT=torch.cuda.device_count(),
+    TORCH_DEVICES_INFO=[torch.cuda.get_device_properties(i) for i in range(torch.cuda.device_count())],
+)
 
-    urls = ("http://images.cocodataset.org/val2017/000000039769.jpg", "http://images.cocodataset.org/val2017/000000294350.jpg")
-    images = [Image.open(requests.get(url, stream=True).raw).convert("RGB") for url in urls]
-    images = torch.stack(list(map(transform, images)))
+# Print Project Information
+logger.info("=" * 16 + " Project Information Begin " + "=" * 16)
+for k, v in PROJECT_INFOMATION_DICT.items():
+    tab = 3 - len(k) // 6
+    if tab == 0:
+        tab += int(len(k) % 6 == 0)
+    tab += 1
+    logger.info(f" | {k}" + "\t" * tab + f"{v}")
+logger.info("=" * 16 + " Project Information End " + "=" * 16)
 
-    sentences = ["a photo of a cat", "a photo of a dog", "a photo of bird", "a photo of person"]
-    print(f"{sentences=}")
-    tokens = tokenizer(sentences)
+# model
+model = nn.Linear(1, 1)
 
-    model = gtcnn.CLIP(512)
-    n = 9
-    model_path = PROJECT_ROOT / "models" / f"{model.__class__.__name__}" / f"{model.__class__.__name__}-Freeze{n:02d}.pth"
-    if False and model_path.exists():
-        logger.info(f"loading model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
-    else:
-        logger.info("converting model from openclip model")
-        model = convert_model_params_laion2b_s34b_b79k_to_CLIP512(
-            openclip_model, model.__class__, convert_num_layers=n, freeze=True
-        )
-        model_path.parent.mkdir(exist_ok=True, parents=True)
-        torch.save(
-            model.state_dict(),
-            model_path,
-        )
-
-    print(torchinfo.summary(model, input_data=(images, tokens)))
-    model.eval()
-    with torch.inference_mode(), torch.amp.autocast(device_type="cuda"):
-        probs, *_ = model(images, tokens, softmax=True, normalize=True)
-
-    print(f"model result: {probs=}")
-    for idx in probs.argmax(dim=-1):
-        print(sentences[idx.item()])
-
-
-inference()
+if IS_DISTRIBUTED and IS_CUDA_AVAILABLE:
+    TORCH_STRAEM = torch.cuda.Stream()
+    TORCH_STRAEM.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(TORCH_STRAEM):
+        model = model.to(LOCAL_RANK)
+        model = DistributedDataParallel(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
