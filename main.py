@@ -64,14 +64,21 @@ for k, v in PROJECT_INFOMATION_DICT.items():
         tab += int(len(k) % 6 == 0)
     tab += 1
     logger.info(f" | {k}" + "\t" * tab + f"{v}")
+wandb.config.update({"project_information": PROJECT_INFOMATION_DICT})
 logger.info("=" * 16 + " Project Information End " + "=" * 16)
 
+# %%
 # model
-model = nn.Linear(1, 1)
+model = None
 
-if IS_DISTRIBUTED and IS_CUDA_AVAILABLE:
+if model is not None and IS_DISTRIBUTED and IS_CUDA_AVAILABLE:
     TORCH_STRAEM = torch.cuda.Stream()
     TORCH_STRAEM.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(TORCH_STRAEM):
         model = model.to(LOCAL_RANK)
         model = DistributedDataParallel(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
+        torch.cuda.current_stream().wait_stream(TORCH_STRAEM)
+
+    logger.info("Model is DistributedDataParallel")
+
+# %%

@@ -41,7 +41,11 @@ class SyntacticTransformer(nn.Module):
         *,
         attention_mask: Optional[torch.Tensor] = None,
         attention_gate: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> (
+        torch.Tensor
+        | tuple[torch.Tensor, torch.Tensor]
+        | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ):
         if not self.batch_first:
             x = x.transpose(0, 1).contiguous()
 

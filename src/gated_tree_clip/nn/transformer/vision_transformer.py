@@ -38,7 +38,9 @@ class VisionTransformer(nn.Module):
         patch_dropout_prob: float = 0.0,
     ) -> None:
         super().__init__()
-        self.transformer = Transformer(patch_embed_dim, num_heads, num_layers, batch_first)
+        self.transformer = Transformer(
+            patch_embed_dim, num_heads, num_layers, batch_first
+        )
         self.embed_dim = embed_dim
         self.patch_embed_dim = patch_embed_dim
 
@@ -48,7 +50,9 @@ class VisionTransformer(nn.Module):
         elif len(input_image_size) == 2:
             input_image_size = (3, *input_image_size)
         elif len(input_image_size) > 3:
-            logger.warnning(f"{input_image_size=} is not a valid image size. Using the first 3 elements.")
+            logger.warnning(
+                f"{input_image_size=} is not a valid image size. Using the first 3 elements."
+            )
             input_image_size = input_image_size[:3]
 
         self.patch_size = patch_size
@@ -58,8 +62,12 @@ class VisionTransformer(nn.Module):
         self.input_image_size = input_image_size
 
         # check if the input image size is divisible by the patch size
-        assert input_image_size[1] % patch_size[0] == 0, f"{input_image_size=} {patch_size=} {patch_stride=}"
-        assert input_image_size[2] % patch_size[1] == 0, f"{input_image_size=} {patch_size=} {patch_stride=}"
+        assert (
+            input_image_size[1] % patch_size[0] == 0
+        ), f"{input_image_size=} {patch_size=} {patch_stride=}"
+        assert (
+            input_image_size[2] % patch_size[1] == 0
+        ), f"{input_image_size=} {patch_size=} {patch_stride=}"
 
         self.class_embedding = nn.Parameter(self.scale * torch.randn(patch_embed_dim))
         self.positional_grid_size = (
@@ -82,11 +90,17 @@ class VisionTransformer(nn.Module):
             bias=False,
         )
 
-        self.patchdropout_pre = PatchDropout(p=patch_dropout_prob) if patch_dropout_prob > 0 else nn.Identity()
+        self.patchdropout_pre = (
+            PatchDropout(p=patch_dropout_prob)
+            if patch_dropout_prob > 0
+            else nn.Identity()
+        )
         self.layernorm_pre = CastLayerNorm(normalized_shape=patch_embed_dim)
         self.layernorm_post = CastLayerNorm(normalized_shape=patch_embed_dim)
 
-        self.head_weight = nn.Parameter(self.scale * torch.randn(patch_embed_dim, embed_dim))
+        self.head_weight = nn.Parameter(
+            self.scale * torch.randn(patch_embed_dim, embed_dim)
+        )
 
     def forward(
         self,
@@ -111,13 +125,17 @@ class VisionTransformer(nn.Module):
         x = x.reshape(batch_size, self.patch_embed_dim, -1).permute(0, 2, 1)
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, num_patches + 1, self.patch_embed_dim]
-        x = torch.cat([self.class_embedding.view(1, 1, -1).expand(batch_size, -1, -1), x], dim=1)
+        x = torch.cat(
+            [self.class_embedding.view(1, 1, -1).expand(batch_size, -1, -1), x], dim=1
+        )
         x = x + self.positional_embedding
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, num_patches + 1, self.patch_embed_dim]
         x = self.patchdropout_pre(x)
         x = self.layernorm_pre(x)
-        x, w = self.transformer(x, attention_mask=attention_mask, return_weights=return_weights)
+        x, w = self.transformer(
+            x, attention_mask=attention_mask, return_weights=return_weights
+        )
         x = self.layernorm_post(x)
 
         # [batch, num_patches + 1, self.patch_embed_dim] -> [batch, self.patch_embed_dim], [batch, num_patches, self.patch_embed_dim]
